@@ -1,0 +1,64 @@
+// Data the controller hands to the window.
+
+export struct QueueRow {
+    id: string,
+    download: bool,
+    name: string,
+    // The file being moved inside a folder transfer, or "".
+    sub: string,
+    error: string,
+    // "3 left out", and the names with why (tooltip), or "".
+    left-out: string,
+    left-out-detail: string,
+    // 0..1 while running or done; -1 when there is no bar to draw.
+    progress: float,
+    failed: bool,
+    active: bool,
+    // Right column: "1.2 MB / 4.0 MB", "done", "queued", "cancelled"...
+    state: string,
+    dim: bool,
+    can-cancel: bool,
+}
+
+export struct LogRow {
+    time: string,
+    line: string,
+    // 0 plain, 1 warning/error, 2 sent (> ...), 3 received (< ...)
+    kind: int,
+}
+
+export struct ConflictInfo {
+    title: string,
+    name: string,
+    path: string,
+    src-label: string,
+    src-size: string,
+    src-date: string,
+    dst-label: string,
+    dst-size: string,
+    dst-date: string,
+    can-resume: bool,
+    resume-hint: string,
+    waiting: string,
+    // What happened, in a sentence (an edit save's question); empty for the usual card.
+    question: string,
+    skip-text: string,
+    overwrite-text: string,
+    // Asked on its own: no "Apply to all remaining conflicts".
+    single: bool,
+}
+
+export struct EditRow {
+    name: string,
+    remote: string,
+}
+
+export struct BookmarkRow {
+    name: string,
+    remote: string,
+}
+
+export struct SiteRow {
+    name: string,
+    detail: string,
+}

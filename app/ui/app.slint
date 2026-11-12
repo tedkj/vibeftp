@@ -1,0 +1,664 @@
+// VibeFTP's main window. Layout and drawing only; every decision is made in Rust.
+
+import {
+    Theme, Type, Icons, Icon, Chamfer, TipLayer, MenuEntry, Menu, ToastKind, Toast, LinkState
+} from "@vibeware";
+import { PaneView, FileItem } from "pane.slint";
+import { TopBar } from "topbar.slint";
+import { QueuePanel, LogPanel } from "panels.slint";
+import { ModalDialog, ConflictDialog, PermsDialog } from "dialogs.slint";
+import { AboutDialog, CheckRow } from "brand.slint";
+import { SiteManager } from "sites.slint";
+import { QueueRow, LogRow, ConflictInfo, EditRow, BookmarkRow, SiteRow } from "types.slint";
+
+export { FileItem, QueueRow, LogRow, ConflictInfo, EditRow, BookmarkRow, SiteRow }
+
+export struct PaneInfo {
+    title: string,
+    path: string,
+    offline: bool,
+    loading: bool,
+    filter-text: string,
+    show-filter: bool,
+    sort-key: int,
+    sort-asc: bool,
+    can-transfer: bool,
+    counts: string,
+    selection: string,
+    perms: string,
+    cursor-index: int,
+    scroll-seq: int,
+    drop-hover: bool,
+    drop-path: string,
+    root-index: int,
+}
+
+export struct ToastItem {
+    id: int,
+    text: string,
+    kind: ToastKind,
+    action: string,
+}
+
+export component AppWindow inherits Window {
+    title: "VibeFTP";
+    icon: @image-url("../assets/vibeftp-128.png");
+    preferred-width: 1180px;
+    preferred-height: 720px;
+    min-width: 760px;
+    min-height: 460px;
+    // The panes' colour: they cover most of the window and would otherwise be filled twice per
+    // frame (the renderer fills a dirty area with the window's background first). The bars and
+    // panels draw their own.
+    background: Theme.surface;
+    default-font-family: Type.ui;
+    default-font-size: Type.small;
+    default-font-weight: Type.regular;
+
+    // ---- state from the controller ----
+    in property <PaneInfo> local;
+    in property <PaneInfo> remote;
+    in property <[FileItem]> local-items;
+    in property <[FileItem]> remote-items;
+    in property <[string]> roots;
+    in property <[string]> site-names;
+    // Per site, the picker's quiet right column (its protocol).
+    in property <[string]> site-details;
+    in-out property <int> site-index: -1;
+    in property <LinkState> link: LinkState.idle;
+    in property <string> link-title: "Not connected";
+    in property <string> link-detail: "Pick a site and connect";
+    in property <bool> connected;
+    in property <bool> connecting;
+    in property <string> status-left;
+    // The status line shows a warning or an error (drawn in the danger colour).
+    in property <bool> status-warn;
+    in property <string> status-right;
+    in property <[ToastItem]> toasts;
+    in property <[MenuEntry]> menu-entries;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <bool> dragging;
+    in property <string> drag-label;
+    // The ghost's icon: a file for exactly one file, else a folder.
+    in property <bool> drag-one-file;
+
+    // Top bar.
+    in-out property <bool> bar-thick: true;
+    // Look for updates a few seconds after start (the menu's switch; prefs.json remembers it).
+    in-out property <bool> update-at-start: true;
+    in property <string> transfer-detail;
+    in property <string> speed: "—";
+    in property <string> sparkline;
+    in property <string> queued: "0";
+    in property <string> done: "0";
+    in property <string> failed;
+    in property <float> progress: -2;
+    in property <[EditRow]> edits;
+    in property <[BookmarkRow]> bookmarks;
+    in property <bool> sync-on;
+    in property <string> update-version;
+    in property <bool> updating;
+
+    // Queue and log.
+    in property <[QueueRow]> queue-rows;
+    in property <bool> queue-visible;
+    in-out property <bool> queue-open: true;
+    in property <string> queue-summary;
+    in property <bool> queue-can-cancel-all;
+    in property <bool> queue-can-clear;
+    in property <string> status-transfers;
+    in-out property <bool> log-open;
+    in property <[LogRow]> log-rows;
+    in property <string> log-filter;
+    in property <bool> log-follow: true;
+    in property <int> log-seq;
+
+    // Dialogs. modal-kind: 0 none, 1 prompt, 2 confirm, 3 password.
+    in property <int> modal-kind;
+    in property <int> modal-seq;
+    // The prompt's text and the password dialog's "Save in keychain", set for every new modal.
+    in-out property <string> modal-typed;
+    in-out property <bool> modal-save: true;
+    in property <string> modal-title;
+    in property <string> modal-body;
+    in property <string> modal-label;
+    in property <string> modal-ok;
+    in property <bool> modal-danger;
+    in property <int> modal-select-to: -1;
+    // A confirm's warning line, and its choices (the trust prompt of a server trusted before):
+    // the controller sets them for every new modal; `modal-choice` is the one chosen, -1 none.
+    in property <string> modal-warning;
+    in property <[string]> modal-choices;
+    in property <string> modal-choices-label;
+    in-out property <int> modal-choice: -1;
+    in property <bool> conflict-open;
+    in property <ConflictInfo> conflict-info;
+    in property <int> conflict-seq;
+    in property <bool> perms-open;
+    in property <string> perms-subject;
+    in property <[bool]> perms-bits;
+    in property <string> perms-text;
+    in property <bool> about-open;
+    // About's version line and its install check (the controller's words and states).
+    in property <string> about-line;
+    in property <[CheckRow]> check-rows;
+    in property <bool> checking;
+    in property <bool> checked;
+
+    // Site manager.
+    in property <bool> sm-open;
+    in property <[SiteRow]> sm-sites;
+    in property <int> sm-current: -1;
+    in property <string> sm-heading;
+    in property <string> sm-note;
+    in-out property <string> sm-name;
+    in-out property <int> sm-protocol;
+    in-out property <string> sm-host;
+    in-out property <string> sm-port;
+    in-out property <string> sm-user;
+    in-out property <string> sm-pass;
+    in property <bool> sm-has-password;
+    in property <bool> sm-clear-password;
+    in-out property <string> sm-key;
+    in-out property <int> sm-mode;
+    in-out property <int> sm-parallel;
+    in-out property <string> sm-rpath;
+    in-out property <string> sm-lpath;
+    in property <bool> sm-dirty;
+    in property <bool> sm-busy;
+    in property <bool> sm-invalid-port;
+
+    /// Any dialog open: the panes behind it take no keys, drags or drops.
+    out property <bool> dialog-open: root.modal-kind != 0 || root.conflict-open || root.perms-open || root.sm-open || root.about-open;
+    // Drawn bottom to top: site manager, conflict, permissions, about, prompt. Only the top one
+    // has the keyboard.
+    property <bool> about-top: root.modal-kind == 0;
+    property <bool> perms-top: root.about-top && !root.about-open;
+    property <bool> conflict-top: root.perms-top && !root.perms-open;
+    property <bool> sm-top: root.conflict-top && !root.conflict-open;
+    changed dialog-open => {
+        if (!root.dialog-open) {
+            root.dialogs-closed();
+        }
+    }
+
+    // ---- events to the controller (side: 0 local, 1 remote) ----
+    callback pane-navigate(int, string);
+    callback pane-up(int);
+    callback pane-refresh(int);
+    callback pane-mkdir(int);
+    callback pane-open-filter(int);
+    callback pane-filter(int, string);
+    callback pane-filter-closed(int);
+    callback pane-transfer(int);
+    callback pane-sort(int, int);
+    callback pane-root(int, int);
+    callback row-pressed(int, int, bool, bool);
+    callback row-clicked(int, int);
+    callback row-opened(int, int);
+    callback row-context(int, int, length, length);
+    callback blank-pressed(int);
+    callback blank-context(int, length, length);
+    callback list-key(int, string, bool, bool, bool, bool, int) -> bool;
+    callback drag(int, int, int, bool);
+    callback site-picked(int);
+    callback connect-clicked();
+    callback open-sites();
+    callback theme-toggled();
+    callback menu-activated(int);
+    callback dialogs-closed();
+    callback modal-accepted(string, bool);
+    callback modal-cancelled();
+    callback conflict-answer(int, bool);
+    callback perms-toggle(int);
+    callback perms-text-edited(string);
+    callback perms-apply();
+    callback perms-cancelled();
+    // About: "Check this install" pressed (the controller runs it on a worker, once at a time),
+    // the website link, and closed.
+    callback check-install();
+    callback open-site();
+    callback about-closed();
+    callback sm-pick(int);
+    callback sm-new();
+    callback sm-edited();
+    callback sm-protocol-picked(int);
+    callback sm-forget-password();
+    callback sm-browse-key();
+    callback sm-browse-local();
+    callback sm-save();
+    callback sm-delete();
+    callback sm-connect();
+    callback sm-close();
+    callback go-bookmark(int);
+    callback remove-bookmark(int);
+    callback add-bookmark();
+    callback stop-editing(int);
+    callback toggle-sync();
+    callback toggle-log();
+    callback toggle-bar();
+    callback toggle-update-at-start();
+    callback check-updates();
+    callback about();
+    callback install-update();
+    callback queue-toggle();
+    callback queue-cancel(string);
+    callback queue-cancel-all();
+    callback queue-clear();
+    callback log-filter-edited(string);
+    callback log-follow-toggled(bool);
+    callback log-clear();
+    callback toast-dismissed(int);
+    callback toast-action(int);
+    // The Copy buttons: text to the clipboard, true once it is there (else a toast says why).
+    callback copy-text(string) -> bool;
+    callback log-copy-all() -> bool;
+
+    property <length> ghost-x;
+    property <length> ghost-y;
+
+    // ---- for Rust: hit tests and focus ----
+    /// 0 local, 1 remote, -1 neither.
+    public function hit-side(x: length, y: length) -> int {
+        local-pane.contains(x, y) ? 0 : remote-pane.contains(x, y) ? 1 : -1
+    }
+    /// The view row of that side at a window position, or -1.
+    public function hit-row(side: int, x: length, y: length) -> int {
+        side == 0 ? local-pane.row-at(x, y) : side == 1 ? remote-pane.row-at(x, y) : -1
+    }
+    public function show-menu() {
+        context-menu.show();
+    }
+    public function focus-pane(side: int) {
+        // The offline remote list takes no focus: Slint would walk on to whatever comes next.
+        if (side == 1 && !root.remote.offline) {
+            remote-pane.focus-list();
+        } else {
+            local-pane.focus-list();
+        }
+    }
+    // Every popup, before a dialog takes the keyboard: closing one gives the focus back to the
+    // item focused before it opened, which would be the list behind the dialog.
+    function close-popups() {
+        context-menu.close();
+        top-bar.close-popups();
+    }
+
+    function drag-update(from: int, x: length, y: length, end: bool) {
+        root.ghost-x = x;
+        root.ghost-y = y;
+        let over = root.hit-side(x, y);
+        root.drag(from, over, root.hit-row(over, x, y), end);
+    }
+
+    VerticalLayout {
+        // ---------- top bar ----------
+        top-bar := TopBar {
+            thick: root.bar-thick;
+            title: root.link-title;
+            sub: root.link-detail;
+            detail: root.transfer-detail;
+            connected: root.connected;
+            connecting: root.connecting;
+            speed: root.speed;
+            sparkline: root.sparkline;
+            queued: root.queued;
+            done: root.done;
+            failed: root.failed;
+            progress: root.progress;
+            edits: root.edits;
+            bookmarks: root.bookmarks;
+            sync: root.sync-on;
+            log: root.log-open;
+            update-version: root.update-version;
+            update-at-start: root.update-at-start;
+            updating: root.updating;
+            inert: root.dialog-open;
+            // Connect dials the site picked last, or opens the site manager.
+            connect-clicked => { root.connect-clicked(); }
+            manage-sites => { root.open-sites(); }
+            go-bookmark(i) => { root.go-bookmark(i); }
+            remove-bookmark(i) => { root.remove-bookmark(i); }
+            add-bookmark => { root.add-bookmark(); }
+            stop-editing(i) => { root.stop-editing(i); }
+            toggle-sync => { root.toggle-sync(); }
+            toggle-log => { root.toggle-log(); }
+            toggle-bar => { root.toggle-bar(); }
+            toggle-theme => { root.theme-toggled(); }
+            toggle-update-at-start => { root.toggle-update-at-start(); }
+            check-updates => { root.check-updates(); }
+            about => { root.about(); }
+            install-update => { root.install-update(); }
+        }
+
+        // ---------- panes ----------
+        HorizontalLayout {
+            vertical-stretch: 1;
+            local-pane := PaneView {
+                // Both start from nothing and stretch alike: always an even split.
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                min-width: 340px;
+                name: "LOCAL";
+                title: root.local.title;
+                remote: false;
+                path: root.local.path;
+                items: root.local-items;
+                roots: root.roots;
+                root-index: root.local.root-index;
+                offline: root.local.offline;
+                loading: root.local.loading;
+                filter-text: root.local.filter-text;
+                show-filter: root.local.show-filter;
+                sort-key: root.local.sort-key;
+                sort-asc: root.local.sort-asc;
+                can-transfer: root.local.can-transfer;
+                counts: root.local.counts;
+                selection: root.local.selection;
+                perms: root.local.perms;
+                cursor-index: root.local.cursor-index;
+                scroll-seq: root.local.scroll-seq;
+                drop-hover: root.local.drop-hover;
+                drop-path: root.local.drop-path;
+                dragging-any: root.dragging;
+                inert: root.dialog-open;
+                navigate(p) => { root.pane-navigate(0, p); }
+                up => { root.pane-up(0); }
+                refresh => { root.pane-refresh(0); }
+                mkdir => { root.pane-mkdir(0); }
+                open-filter => { root.pane-open-filter(0); }
+                filter-edited(t) => { root.pane-filter(0, t); }
+                filter-closed => { root.pane-filter-closed(0); }
+                transfer => { root.pane-transfer(0); }
+                sort(k) => { root.pane-sort(0, k); }
+                root-picked(i) => { root.pane-root(0, i); }
+                row-pressed(i, c, s) => { root.row-pressed(0, i, c, s); }
+                row-clicked(i) => { root.row-clicked(0, i); }
+                row-opened(i) => { root.row-opened(0, i); }
+                row-context(i, x, y) => { root.row-context(0, i, x, y); }
+                blank-pressed => { root.blank-pressed(0); }
+                blank-context(x, y) => { root.blank-context(0, x, y); }
+                list-key(t, c, s, a, r, page) => { root.list-key(0, t, c, s, a, r, page) }
+                drag-moved(x, y) => { root.drag-update(0, x, y, false); }
+                drag-ended(x, y) => { root.drag-update(0, x, y, true); }
+                open-sites => { root.open-sites(); }
+            }
+            Rectangle { width: 1px; background: Theme.line; }
+            remote-pane := PaneView {
+                // Both start from nothing and stretch alike: always an even split.
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                min-width: 340px;
+                name: "REMOTE";
+                title: root.remote.title;
+                remote: true;
+                path: root.remote.path;
+                items: root.remote-items;
+                offline: root.remote.offline;
+                loading: root.remote.loading;
+                filter-text: root.remote.filter-text;
+                show-filter: root.remote.show-filter;
+                sort-key: root.remote.sort-key;
+                sort-asc: root.remote.sort-asc;
+                can-transfer: root.remote.can-transfer;
+                counts: root.remote.counts;
+                selection: root.remote.selection;
+                perms: root.remote.perms;
+                cursor-index: root.remote.cursor-index;
+                scroll-seq: root.remote.scroll-seq;
+                drop-hover: root.remote.drop-hover;
+                drop-path: root.remote.drop-path;
+                dragging-any: root.dragging;
+                inert: root.dialog-open;
+                navigate(p) => { root.pane-navigate(1, p); }
+                up => { root.pane-up(1); }
+                refresh => { root.pane-refresh(1); }
+                mkdir => { root.pane-mkdir(1); }
+                open-filter => { root.pane-open-filter(1); }
+                filter-edited(t) => { root.pane-filter(1, t); }
+                filter-closed => { root.pane-filter-closed(1); }
+                transfer => { root.pane-transfer(1); }
+                sort(k) => { root.pane-sort(1, k); }
+                row-pressed(i, c, s) => { root.row-pressed(1, i, c, s); }
+                row-clicked(i) => { root.row-clicked(1, i); }
+                row-opened(i) => { root.row-opened(1, i); }
+                row-context(i, x, y) => { root.row-context(1, i, x, y); }
+                blank-pressed => { root.blank-pressed(1); }
+                blank-context(x, y) => { root.blank-context(1, x, y); }
+                list-key(t, c, s, a, r, page) => { root.list-key(1, t, c, s, a, r, page) }
+                drag-moved(x, y) => { root.drag-update(1, x, y, false); }
+                drag-ended(x, y) => { root.drag-update(1, x, y, true); }
+                open-sites => { root.open-sites(); }
+            }
+        }
+
+        // ---------- log and queue ----------
+        if root.log-open: LogPanel {
+            rows: root.log-rows;
+            filter: root.log-filter;
+            follow: root.log-follow;
+            seq: root.log-seq;
+            inert: root.dialog-open;
+            filter-edited(t) => { root.log-filter-edited(t); }
+            follow-toggled(v) => { root.log-follow-toggled(v); }
+            copy-all => { root.log-copy-all() }
+            copy-line(t) => { root.copy-text(t) }
+            clear => { root.log-clear(); }
+            close => { root.toggle-log(); }
+        }
+        if root.queue-visible: QueuePanel {
+            rows: root.queue-rows;
+            open: root.queue-open;
+            summary: root.queue-summary;
+            can-cancel-all: root.queue-can-cancel-all;
+            can-clear: root.queue-can-clear;
+            inert: root.dialog-open;
+            toggle => { root.queue-toggle(); }
+            cancel(id) => { root.queue-cancel(id); }
+            cancel-all => { root.queue-cancel-all(); }
+            clear-finished => { root.queue-clear(); }
+        }
+
+        // ---------- status bar ----------
+        Rectangle {
+            height: 26px;
+            background: Theme.bg;
+            Rectangle { y: 0; height: 1px; background: Theme.line; }
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 12px;
+                spacing: 14px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    accessible-role: button;
+                    accessible-label: root.log-open ? "Hide protocol log" : "Show protocol log";
+                    accessible-action-default => { root.toggle-log(); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon { path: Icons.terminal; tint: Theme.ink-3; }
+                        }
+                        Text { text: root.status-left; horizontal-stretch: 1; overflow: elide; font-family: Type.mono; font-size: Type.small; color: root.status-warn ? Theme.danger : Theme.ink-3; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.toggle-log(); } }
+                }
+                if root.status-transfers != "": Rectangle {
+                    width: st.preferred-width;
+                    accessible-role: button;
+                    accessible-label: "Transfers: " + root.status-transfers;
+                    accessible-action-default => { root.queue-toggle(); }
+                    st := HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon { path: Icons.transfers; tint: Theme.ink-3; }
+                        }
+                        Text { text: root.status-transfers; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.queue-toggle(); } }
+                }
+                if root.status-right != "": Text { text: root.status-right; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                if root.sync-on: HorizontalLayout {
+                    spacing: 4px;
+                    VerticalLayout {
+                        alignment: center;
+                        Icon { path: Icons.sync; tint: Theme.accent; }
+                    }
+                    Text { text: "sync"; font-size: Type.small; color: Theme.accent; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+
+    context-menu := Menu {
+        x: root.menu-x;
+        y: root.menu-y;
+        entries: root.menu-entries;
+        activated(i) => { root.menu-activated(i); }
+    }
+
+    // ---------- dialogs ----------
+    if root.sm-open: SiteManager {
+        width: root.width;
+        height: root.height;
+        sites: root.sm-sites;
+        current: root.sm-current;
+        heading: root.sm-heading;
+        note: root.sm-note;
+        f-name <=> root.sm-name;
+        f-protocol <=> root.sm-protocol;
+        f-host <=> root.sm-host;
+        f-port <=> root.sm-port;
+        f-user <=> root.sm-user;
+        f-pass <=> root.sm-pass;
+        f-has-password: root.sm-has-password;
+        f-clear-password: root.sm-clear-password;
+        f-key <=> root.sm-key;
+        f-mode <=> root.sm-mode;
+        f-parallel <=> root.sm-parallel;
+        f-rpath <=> root.sm-rpath;
+        f-lpath <=> root.sm-lpath;
+        dirty: root.sm-dirty;
+        busy: root.sm-busy;
+        connecting: root.connecting;
+        invalid-port: root.sm-invalid-port;
+        top: root.sm-top;
+        pick(i) => { root.sm-pick(i); }
+        new-site => { root.sm-new(); }
+        edited => { root.sm-edited(); }
+        protocol-picked(i) => { root.sm-protocol-picked(i); }
+        forget-password => { root.sm-forget-password(); }
+        browse-key => { root.sm-browse-key(); }
+        browse-local => { root.sm-browse-local(); }
+        save => { root.sm-save(); }
+        delete => { root.sm-delete(); }
+        connect => { root.sm-connect(); }
+        close => { root.sm-close(); }
+    }
+    if root.conflict-open: ConflictDialog {
+        width: root.width;
+        height: root.height;
+        info: root.conflict-info;
+        seq: root.conflict-seq;
+        top: root.conflict-top;
+        opening => { root.close-popups(); }
+        answer(a, all) => { root.conflict-answer(a, all); }
+    }
+    if root.perms-open: PermsDialog {
+        width: root.width;
+        height: root.height;
+        subject: root.perms-subject;
+        bits: root.perms-bits;
+        text: root.perms-text;
+        top: root.perms-top;
+        opening => { root.close-popups(); }
+        toggle(i) => { root.perms-toggle(i); }
+        text-edited(t) => { root.perms-text-edited(t); }
+        apply => { root.perms-apply(); }
+        cancelled => { root.perms-cancelled(); }
+    }
+    if root.about-open: AboutDialog {
+        width: root.width;
+        height: root.height;
+        line: root.about-line;
+        rows: root.check-rows;
+        checking: root.checking;
+        checked: root.checked;
+        top: root.about-top;
+        opening => { root.close-popups(); }
+        check => { root.check-install(); }
+        open-site => { root.open-site(); }
+        closed => { root.about-closed(); }
+    }
+    // The newest prompt sits on top of everything (a delete-site confirm over the site manager).
+    if root.modal-kind != 0: ModalDialog {
+        width: root.width;
+        height: root.height;
+        kind: root.modal-kind;
+        seq: root.modal-seq;
+        title: root.modal-title;
+        body: root.modal-body;
+        label: root.modal-label;
+        typed <=> root.modal-typed;
+        save <=> root.modal-save;
+        ok-text: root.modal-ok;
+        danger: root.modal-danger;
+        select-to: root.modal-select-to;
+        warning: root.modal-warning;
+        choices: root.modal-choices;
+        choices-label: root.modal-choices-label;
+        choice <=> root.modal-choice;
+        opening => { root.close-popups(); }
+        accepted(v, save) => { root.modal-accepted(v, save); }
+        cancelled => { root.modal-cancelled(); }
+        copy(t) => { root.copy-text(t) }
+    }
+
+    // ---------- toasts: bottom right, newest at the bottom ----------
+    Rectangle {
+        x: root.width - self.width - 14px;
+        y: 60px;
+        width: 380px;
+        height: root.height - 60px - 62px;
+        VerticalLayout {
+            alignment: end;
+            spacing: 8px;
+            for t in root.toasts: Toast {
+                text: t.text;
+                kind: t.kind;
+                action: t.action;
+                inert: root.dialog-open;
+                dismissed => { root.toast-dismissed(t.id); }
+                action-clicked => { root.toast-action(t.id); }
+                copy => { root.copy-text(t.text) }
+            }
+        }
+    }
+
+    // ---------- drag ghost ----------
+    if root.dragging: Chamfer {
+        x: root.ghost-x + 14px;
+        y: root.ghost-y + 10px;
+        width: ghost.preferred-width + 20px;
+        height: 26px;
+        fill: Theme.surface;
+        stroke: Theme.accent;
+        ghost := HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 10px;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Icon { path: root.drag-one-file ? Icons.file : Icons.folder; tint: Theme.accent; }
+            }
+            Text { text: root.drag-label; color: Theme.ink; vertical-alignment: center; }
+        }
+    }
+
+    TipLayer {
+        width: root.width;
+        height: root.height;
+    }
+}

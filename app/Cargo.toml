@@ -1,0 +1,99 @@
+[package]
+name = "vibeftp-app"
+version = "0.2.0-preview"
+description = "VibeFTP: an FTP, FTPS and SFTP client for Windows on a native Slint UI (software renderer)."
+authors = ["Ted K. Johansen"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/tedkj/vibeftp"
+edition = "2024"
+
+[lib]
+name = "vibeftp_app"
+# No doc tests (review RRAB-1): a code block in a doc comment would be a test build of its own,
+# one that could bring src/net.rs in. tests/pe.rs checks this line.
+doctest = false
+
+[[bin]]
+name = "kitchen"
+path = "src/bin/kitchen.rs"
+
+# installer\build.ps1 ships it as VibeFTP.exe.
+[[bin]]
+name = "vibeftp-native"
+path = "src/main.rs"
+
+[features]
+# Startup hooks for measurements and live checks (VIBEFTP_DEV_CONNECT, _PASSWORD, _LOCAL, _LOG;
+# _HOME runs on a profile and keychain namespace of its own).
+# Never in a shipped build.
+dev-hooks = []
+
+[dependencies]
+vibeftp-core = { path = "../core" }
+# Pinned exactly: the testing crate below must match it, and the UI is tuned to this renderer.
+# unstable-winit-030: the window-event hook for files dropped from Explorer.
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    "software-renderer-path",
+    "accessibility",
+    "unstable-winit-030",
+] }
+tokio = { version = "1.53.3", features = ["full"] }
+# Local times in the file lists, joining two navigations, comparing site forms, and the native
+# file pickers.
+chrono = "0.4"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.16"
+# The updater: HTTPS on rustls with the system's roots, minisign verification of the installer.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+minisign-verify = "0.3"
+# The trusted comment's own signature, checked before the bar offers a version (minisign-verify
+# only checks it together with the download).
+ed25519-dalek = "3.0"
+base64 = "0.22"
+# The shell calls (open, reveal), collation, folder lookups and the clipboard; About's install
+# check (WinHTTP for the release list, WinVerifyTrust and the signer's name, BCrypt's SHA-256,
+# the exe's file identity for an update under the running app).
+# minisign-verify above also checks the release list's signature, with the updater's key.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemInformation",
+    "Win32_Globalization",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+] }
+
+[build-dependencies]
+slint-build = "=1.18.1"
+# Icon, version info and manifest in the exe.
+embed-resource = "3.0.12"
+
+[dev-dependencies]
+i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
+# Only the tests use it, to write the snapshot PNGs.
+png = "0.18"
+# Signs the updater tests' fixtures with throwaway keys, as releases are signed.
+vibeftp-release = { path = "../tools/release" }
+# tests/pe.rs starts the exe and check.ps1 in a job object that ends them with the test.
+# tests/updater.rs sets the error mode so a non-program fails without a dialog.
+windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_Debug", "Win32_System_JobObjects","Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }

@@ -1,0 +1,284 @@
+// The bottom panels: the transfer queue and the protocol log.
+
+import { ListView } from "std-widgets.slint";
+import { Theme, Type, Icons, Icon, Button, ButtonKind, IconButton, CopyButton, Field, Checkbox, TipArea } from "@vibeware";
+import { QueueRow, LogRow } from "types.slint";
+
+component QueueLine inherits Rectangle {
+    in property <QueueRow> item;
+    in property <bool> inert;
+    callback cancel();
+    height: 28px;
+    // One accessibility node per row (as the file rows): the texts inside are not nodes of their
+    // own; the error and what was left out ride on the row's description.
+    accessible-role: list-item;
+    accessible-label: root.item.name;
+    accessible-value: root.item.state;
+    accessible-description: root.item.error + (root.item.error != "" && root.item.left-out-detail != "" ? "\n" : "") + root.item.left-out-detail;
+    opacity: root.item.dim ? 0.55 : 1;
+    Rectangle { y: 0; height: 1px; background: Theme.line.with-alpha(0.6); }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                path: root.item.download ? Icons.download : Icons.upload;
+                tint: root.item.failed ? Theme.danger : root.item.active ? Theme.accent : Theme.ink-3;
+            }
+        }
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+            Text { text: root.item.name; accessible-role: none; font-size: Type.small; color: Theme.ink; overflow: elide; vertical-alignment: center; max-width: 280px; }
+            if root.item.sub != "": Text { text: "/ " + root.item.sub; accessible-role: none; font-size: Type.small; color: Theme.ink-3; overflow: elide; vertical-alignment: center; }
+            // The row cuts the error short and has no room for the left-out names: hovering
+            // either shows it all in a tip.
+            if root.item.error != "": error-text := Rectangle {
+                min-width: et.min-width;
+                preferred-width: et.preferred-width;
+                et := Text { width: 100%; height: 100%; text: root.item.error; accessible-role: none; font-size: Type.small; color: Theme.danger; overflow: elide; vertical-alignment: center; }
+                TipArea { tooltip: root.item.error; }
+            }
+            if root.item.left-out != "": left-out := Rectangle {
+                width: lt.preferred-width;
+                lt := Text {
+                    height: 100%;
+                    text: root.item.left-out;
+                    accessible-role: none;
+                    font-size: Type.small;
+                    color: Theme.danger;
+                    vertical-alignment: center;
+                }
+                TipArea { tooltip: root.item.left-out-detail; }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            width: 180px;
+            Rectangle {
+                height: 3px;
+                background: Theme.surface-3;
+                clip: true;
+                if root.item.progress >= 0: Rectangle {
+                    x: 0;
+                    width: parent.width * Math.clamp(root.item.progress, 0, 1);
+                    background: root.item.failed ? Theme.danger : Theme.accent;
+                }
+            }
+        }
+        Text { text: root.item.state; accessible-role: none; width: 120px; horizontal-alignment: right; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        VerticalLayout {
+            alignment: center;
+            width: 28px;
+            if root.item.can-cancel: IconButton { inert: root.inert; icon: Icons.x; label: "Cancel " + root.item.name; tooltip: "Cancel"; clicked => { root.cancel(); } }
+        }
+    }
+}
+
+export component QueuePanel inherits Rectangle {
+    in property <[QueueRow]> rows;
+    in property <bool> open;
+    in property <string> summary;
+    in property <bool> can-cancel-all;
+    in property <bool> can-clear;
+    in property <bool> inert;
+    callback toggle();
+    callback cancel(string);
+    callback cancel-all();
+    callback clear-finished();
+
+    height: root.open ? 176px : 28px;
+    background: Theme.surface;
+    accessible-role: groupbox;
+    accessible-label: "Transfers";
+    Rectangle { y: 0; height: 1px; background: Theme.line; }
+    VerticalLayout {
+        Rectangle {
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 10px;
+                Rectangle {
+                    width: hl.preferred-width;
+                    accessible-role: button;
+                    accessible-label: root.open ? "Hide transfers" : "Show transfers";
+                    accessible-action-default => { root.toggle(); }
+                    hl := HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon { path: root.open ? Icons.chevron-down : Icons.chevron-up; tint: Theme.ink-3; }
+                        }
+                        Text { text: "Transfers"; font-size: Type.small; font-weight: Type.strong; color: Theme.ink-2; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.toggle(); } }
+                }
+                Text { text: root.summary; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                if root.can-cancel-all: VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Cancel all"; kind: ButtonKind.ghost; clicked => { root.cancel-all(); } }
+                }
+                if root.can-clear: VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Clear finished"; kind: ButtonKind.ghost; clicked => { root.clear-finished(); } }
+                }
+            }
+        }
+        if root.open: ListView {
+            vertical-stretch: 1;
+            for r in root.rows: QueueLine {
+                item: r;
+                inert: root.inert;
+                cancel => { root.cancel(r.id); }
+            }
+        }
+    }
+}
+
+export component LogPanel inherits Rectangle {
+    in property <[LogRow]> rows;
+    in property <string> filter;
+    in property <bool> follow;
+    // Bumped by the controller whenever lines arrive or the view is rebuilt.
+    in property <int> seq;
+    in property <bool> inert;
+    callback filter-edited(string);
+    callback follow-toggled(bool);
+    callback clear();
+    callback close();
+    // The lines cannot be selected: Copy all takes the ones on screen (the filter applies), a
+    // right-click one line ("time line"). Both answer whether the clipboard took it.
+    callback copy-all() -> bool;
+    callback copy-line(string) -> bool;
+
+    height: 168px;
+    background: Theme.bg;
+    accessible-role: groupbox;
+    accessible-label: "Protocol log";
+
+    // Following: keep the newest line in view. Scrolling up pauses it; back to the bottom resumes.
+    function to-end() {
+        list.content-y = Math.min(0px, list.visible-height - root.rows.length * 18px);
+    }
+    // Deferred a tick: the list lays the new rows out first, or the end lands a batch short.
+    later := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if (root.follow) {
+                root.to-end();
+            }
+        }
+    }
+    changed seq => {
+        if (root.follow) {
+            later.running = true;
+        }
+    }
+    changed follow => {
+        if (root.follow) {
+            later.running = true;
+        }
+    }
+    init => { later.running = true; }
+
+    // The line just copied with a right-click, lit for a moment.
+    property <int> copied: -1;
+    flash := Timer {
+        interval: 600ms;
+        running: false;
+        triggered => {
+            root.copied = -1;
+            self.running = false;
+        }
+    }
+
+    Rectangle { y: 0; height: 1px; background: Theme.line; }
+    VerticalLayout {
+        Rectangle {
+            height: 30px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon { path: Icons.terminal; tint: Theme.ink-3; }
+                }
+                Text { text: "Protocol log"; font-size: Type.small; font-weight: Type.strong; color: Theme.ink-2; vertical-alignment: center; }
+                VerticalLayout {
+                    alignment: center;
+                    Field { inert: root.inert; width: 200px; horizontal-stretch: 0; label: ""; placeholder: "filter…"; text: root.filter; edited(t) => { root.filter-edited(t); } }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    Checkbox { inert: root.inert; text: "follow"; controlled: true; checked: root.follow; toggled(v) => { root.follow-toggled(v); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    CopyButton { inert: root.inert; caption: "Copy all"; enabled: root.rows.length > 0; copy => { root.copy-all() } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Clear"; kind: ButtonKind.ghost; clicked => { root.clear(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { inert: root.inert; icon: Icons.x; label: "Close log"; clicked => { root.close(); } }
+                }
+            }
+        }
+        list := ListView {
+            vertical-stretch: 1;
+            scrolled => {
+                let bottom = -self.content-y + self.visible-height >= root.rows.length * 18px - 4px;
+                if (bottom != root.follow) {
+                    root.follow-toggled(bottom);
+                }
+            }
+            for l[i] in root.rows: Rectangle {
+                height: 18px;
+                background: i == root.copied ? Theme.accent-soft : transparent;
+                // One accessibility node per line (follow scrolls the log on every new line).
+                accessible-role: list-item;
+                accessible-label: l.line;
+                accessible-description: l.time;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    spacing: 12px;
+                    Text { text: l.time; accessible-role: none; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                    Text {
+                        text: l.line;
+                        accessible-role: none;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        font-family: Type.mono;
+                        font-size: Type.small;
+                        color: l.kind == 1 ? Theme.danger : l.kind == 2 ? Theme.accent : l.kind == 3 ? Theme.ink-2 : Theme.ink;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right && root.copy-line(l.time + " " + l.line)) {
+                            root.copied = i;
+                            flash.running = true;
+                            flash.restart();
+                        }
+                    }
+                }
+            }
+        }
+        if root.rows.length == 0: Text {
+            text: "Nothing yet. Connect to a site and the conversation shows up here.";
+            font-size: Type.small;
+            color: Theme.ink-3;
+            x: 12px;
+        }
+    }
+}

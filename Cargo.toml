@@ -1,0 +1,19 @@
+[workspace]
+members = ["core", "app", "tools/release"]
+resolver = "3"
+
+# Profiles only apply at the workspace root.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+# Slint 1.18.1 with one fix: a Text losing its repaints after a text layout cache sweep
+# (vendor/README.md). Remove once upstream has it.
+# russh-sftp 3.0.1 with one accessor: the raw session, for a folder read with bounds of its own
+# (vendor/README.md, IN-VibeFTP-2).
+[patch.crates-io]
+i-slint-core = { path = "vendor/i-slint-core-1.18.1" }
+russh-sftp = { path = "vendor/russh-sftp-3.0.1" }

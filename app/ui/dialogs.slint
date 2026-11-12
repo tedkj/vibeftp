@@ -1,0 +1,345 @@
+// The app's dialogs: prompt / confirm / password, the transfer conflict, permissions.
+
+import { Theme, Type, Icons, Icon, Chamfer, Button, ButtonKind, CopyButton, Field, Checkbox, RadioGroup, Dialog } from "@vibeware";
+import { ConflictInfo } from "types.slint";
+
+// The prompt's text field: focus and selection start over with every prompt (`seq`).
+component PromptField inherits Field {
+    in property <int> seq;
+    in property <bool> select;
+    in property <int> select-to: -1;
+    function start() {
+        root.focus-input();
+        if (root.select) {
+            root.select-range(0, root.select-to >= 0 ? root.select-to : 1000000);
+        }
+    }
+    changed seq => { root.start(); }
+    init => { root.start(); }
+}
+
+// One modal at a time. kind: 1 prompt, 2 confirm, 3 password. The controller sets `typed` and
+// `save` for every new one and bumps `seq` (a replaced prompt keeps this instance). As in
+// ConflictDialog, OK and Enter count only 350 ms after each new one shows: a click on its way
+// cannot accept a question that replaced the one it was aimed at. Cancelling is always safe.
+// Enter in a prompt's field counts at once when that field was typed into since it showed: the
+// keystrokes were aimed at this one.
+// A confirm with `choices` (the trust prompt of a server trusted before) carries a warning and
+// a radio group with nothing chosen: OK stays disabled, and Enter does nothing, until one is.
+export component ModalDialog {
+    in property <int> kind;
+    in property <int> seq;
+    in property <string> title;
+    in property <string> body;
+    in property <string> label;
+    in-out property <string> typed;
+    in-out property <bool> save: true;
+    in property <string> ok-text: "OK";
+    in property <bool> danger;
+    // Prompt: select the text up to here (byte offset; the stem of a file name), or -1 for all.
+    in property <int> select-to: -1;
+    callback accepted(string, bool);
+    callback cancelled();
+    // Right before it takes the keyboard (the window closes its popups).
+    callback opening();
+    // A confirm's Copy: its title and body to the clipboard, true once they are there.
+    callback copy(string) -> bool;
+    // Confirm: a line set apart under the body, with the alert mark.
+    in property <string> warning;
+    // Confirm: options to choose from first, the group's name, and the one chosen (-1 none).
+    in property <[string]> choices;
+    in property <string> choices-label;
+    in-out property <int> choice: -1;
+    property <bool> choosing: root.kind == 2 && root.choices.length > 0;
+    property <bool> can-accept: !root.choosing || root.choice >= 0;
+
+    // The seq being armed, and the one that is. Comparing with `seq` itself shuts the door the
+    // moment a new modal is set, before `changed seq` has run.
+    property <int> arming;
+    property <int> armed-for: -1;
+    property <int> edited-for: -1;
+
+    function accept(t: string) {
+        if (root.armed-for == root.seq && root.can-accept) {
+            root.accepted(t, root.save);
+        }
+    }
+
+    init => { root.arming = root.seq; }
+    changed seq => {
+        root.arming = root.seq;
+        arm.running = true;
+        arm.restart();
+        if (root.kind == 2 && !root.choosing) {
+            dlg.grab-focus(); // a confirm in place of a prompt: its field is gone
+        }
+    }
+    arm := Timer {
+        interval: 350ms;
+        running: true;
+        triggered => {
+            root.armed-for = root.arming;
+            self.running = false;
+        }
+    }
+
+    dlg := Dialog {
+        width: root.width;
+        height: root.height;
+        title: root.title;
+        dialog-width: root.kind == 2 ? 420px : 400px;
+        // A confirm takes Enter only on its focused button: a stray Enter never deletes. One
+        // with choices takes it once a choice is made.
+        enter-accepts: root.kind != 2 || (root.choosing && root.choice >= 0);
+        opening => { root.opening(); }
+        cancelled => { root.cancelled(); }
+        accepted => { root.accept(root.typed); }
+        if root.kind == 2: Text {
+            text: root.body;
+            wrap: word-wrap;
+            font-size: Type.body;
+            color: Theme.ink-2;
+        }
+        // A wrapped Text in a conditional row is measured at its own preferred width (Slint
+        // 1.18.1), so the panel came out too short and the buttons fell below it: min-height
+        // floors the Text at its real height, min-width 0 lets a long fingerprint wrap.
+        if root.kind == 2 && root.warning != "": HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: start;
+                Icon { path: Icons.alert; tint: Theme.warn; }
+            }
+            Text {
+                text: root.warning;
+                wrap: word-wrap;
+                min-width: 0px;
+                min-height: self.preferred-height;
+                horizontal-stretch: 1;
+                font-size: Type.body;
+                color: Theme.ink;
+            }
+        }
+        // The keyboard starts on the first option (nothing chosen): Up/Down or Tab move,
+        // Space chooses, Enter confirms once one is chosen.
+        if root.choosing: RadioGroup {
+            property <int> seq: root.seq;
+            changed seq => { self.focus-first(); }
+            init => { self.focus-first(); }
+            label: root.choices-label;
+            options: root.choices;
+            selected <=> root.choice;
+        }
+        if root.kind != 2 && root.label != "": Text {
+            text: root.label;
+            wrap: word-wrap;
+            font-size: Type.small;
+            color: Theme.ink-2;
+        }
+        if root.kind != 2: PromptField {
+            text <=> root.typed;
+            placeholder: root.label;
+            password: root.kind == 3;
+            mono: true;
+            seq: root.seq;
+            select: root.kind == 1;
+            select-to: root.select-to;
+            edited => { root.edited-for = root.seq; }
+            // Typed into a plain prompt: Enter is the user's own. A password prompt can pop up
+            // over typing (a reconnect), so its Enter waits for the arm like the buttons.
+            accepted(t) => {
+                if ((root.kind == 1 && root.edited-for == root.seq) || root.armed-for == root.seq) {
+                    root.accepted(t, root.save);
+                }
+            }
+        }
+        if root.kind == 3: Checkbox {
+            text: "Save in keychain";
+            checked <=> root.save;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            // The body cannot be selected (a trust prompt's fingerprint is in it): Copy takes
+            // title and body. It never takes Return, armed or not; Copy is always safe.
+            if root.kind == 2: CopyButton { caption: "Copy"; copy => { root.copy(root.title + "\n\n" + root.body + (root.warning == "" ? "" : "\n\n" + root.warning)) } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Cancel"; kind: ButtonKind.ghost; clicked => { root.cancelled(); } }
+            Button {
+                text: root.kind == 3 ? "Connect" : root.ok-text;
+                kind: root.danger ? ButtonKind.danger : ButtonKind.primary;
+                enabled: root.can-accept;
+                clicked => { root.accept(root.typed); }
+            }
+        }
+    }
+}
+
+component Side inherits Chamfer {
+    in property <string> label;
+    in property <string> size;
+    in property <string> date;
+    fill: Theme.bg;
+    stroke: Theme.line;
+    height: col.preferred-height;
+    col := VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
+        Text { text: root.label; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; }
+        Text { text: root.size; font-family: Type.mono; font-size: Type.small; color: Theme.ink; }
+        Text { text: root.date; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; }
+    }
+}
+
+// action: 0 overwrite, 1 resume, 2 skip, 3 cancel. `seq` changes with every new prompt: answers
+// are taken only 350 ms after it shows, so the second click of a double-click (or a click on
+// its way) cannot answer a prompt nobody read.
+export component ConflictDialog {
+    in property <ConflictInfo> info;
+    in property <int> seq;
+    in property <bool> top: true;
+    callback answer(int, bool);
+    callback opening();
+
+    property <bool> all;
+    property <bool> armed;
+
+    function pick(a: int) {
+        if (root.armed) {
+            root.answer(a, root.all);
+        }
+    }
+
+    changed seq => {
+        root.all = false;
+        root.armed = false;
+        arm.running = true;
+        arm.restart();
+    }
+    arm := Timer {
+        interval: 350ms;
+        running: true;
+        triggered => {
+            root.armed = true;
+            self.running = false;
+        }
+    }
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        title: root.info.title;
+        dialog-width: 460px;
+        top: root.top;
+        opening => { root.opening(); }
+        cancelled => { root.pick(3); }
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Icon { path: Icons.alert; tint: Theme.accent; }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                Text { text: root.info.name; font-family: Type.mono; font-size: Type.small; color: Theme.ink; overflow: elide; }
+                if root.info.path != "": Text { text: root.info.path; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+            }
+            if root.info.waiting != "": Text { text: root.info.waiting; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        }
+        if root.info.question != "": Text {
+            text: root.info.question;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            font-size: Type.body;
+            color: Theme.ink-2;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Side { label: root.info.src-label; size: root.info.src-size; date: root.info.src-date; }
+            Side { label: root.info.dst-label; size: root.info.dst-size; date: root.info.dst-date; }
+        }
+        if !root.info.single: Checkbox { inert: !root.top;
+            text: "Apply to all remaining conflicts";
+            checked <=> root.all;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Button { inert: !root.top; text: "Cancel"; kind: ButtonKind.ghost; clicked => { root.pick(3); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { inert: !root.top; text: root.info.skip-text; clicked => { root.pick(2); } }
+            if root.info.can-resume && !root.all: Button { inert: !root.top; text: "Resume"; tooltip: root.info.resume-hint; clicked => { root.pick(1); } }
+            Button { inert: !root.top; text: root.info.overwrite-text; kind: ButtonKind.primary; clicked => { root.pick(0); } }
+        }
+    }
+}
+
+// Owner / group / others x read / write / execute, and the octal form. The controller owns the
+// bits: a click asks (toggle), the text field reports what is typed.
+export component PermsDialog {
+    in property <string> subject;
+    in property <[bool]> bits;
+    in property <string> text;
+    in property <bool> top: true;
+    callback toggle(int);
+    callback text-edited(string);
+    callback apply();
+    callback cancelled();
+    callback opening();
+
+    changed text => {
+        octal.text = root.text;
+    }
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        title: "Permissions · " + root.subject;
+        dialog-width: 380px;
+        top: root.top;
+        opening => { root.opening(); }
+        cancelled => { root.cancelled(); }
+        accepted => { root.apply(); }
+        GridLayout {
+            spacing: 8px;
+            Row {
+                Rectangle { }
+                Text { text: "READ"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: center; }
+                Text { text: "WRITE"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: center; }
+                Text { text: "EXECUTE"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: center; }
+            }
+            for who[w] in ["Owner", "Group", "Others"]: Row {
+                Text { text: who; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                for b in [0, 1, 2]: HorizontalLayout {
+                    alignment: center;
+                    Checkbox { inert: !root.top;
+                        text: "";
+                        accessible-label: who + " " + (b == 0 ? "read" : b == 1 ? "write" : "execute");
+                        controlled: true;
+                        checked: root.bits[w * 3 + b];
+                        toggled => { root.toggle(w * 3 + b); }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: "Octal"; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+            octal := Field { inert: !root.top;
+                width: 96px;
+                horizontal-stretch: 0;
+                mono: true;
+                label: "";
+                placeholder: "Octal";
+                text: root.text;
+                edited(t) => { root.text-edited(t); }
+                accepted => { root.apply(); }
+            }
+            Text { text: "three digits, or four to set the special bits"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button { inert: !root.top; text: "Cancel"; kind: ButtonKind.ghost; clicked => { root.cancelled(); } }
+            Button { inert: !root.top; text: "Apply"; kind: ButtonKind.primary; clicked => { root.apply(); } }
+        }
+    }
+}

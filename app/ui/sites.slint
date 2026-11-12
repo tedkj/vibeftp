@@ -1,0 +1,315 @@
+// The site manager: saved sites on the left, the chosen one's form on the right.
+
+import { ListView } from "std-widgets.slint";
+import { Theme, Type, Icons, Icon, Chamfer, Button, ButtonKind, IconButton, Field, Segmented, Select } from "@vibeware";
+import { SiteRow } from "types.slint";
+
+component Label inherits Text {
+    width: 104px;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+    font-size: Type.small;
+    color: Theme.ink-2;
+}
+
+component Hint inherits Text {
+    vertical-alignment: center;
+    font-size: Type.small;
+    color: Theme.ink-3;
+    wrap: word-wrap;
+    horizontal-stretch: 1;
+}
+
+export component SiteManager {
+    in property <[SiteRow]> sites;
+    in property <int> current: -1;      // the row being edited, -1 for a new site
+    in property <string> heading;
+    // Entries of sites.json this version can't read (kept as they are), when there are any.
+    in property <string> note;
+    in-out property <string> f-name;
+    in-out property <int> f-protocol;    // 0 SFTP, 1 FTPS, 2 FTP
+    in-out property <string> f-host;
+    in-out property <string> f-port;
+    in-out property <string> f-user;
+    in-out property <string> f-pass;
+    in property <bool> f-has-password;
+    in property <bool> f-clear-password;
+    in-out property <string> f-key;
+    in-out property <int> f-mode;        // 0 passive, 1 active
+    in-out property <int> f-parallel;    // index into the Connections choices
+    in-out property <string> f-rpath;
+    in-out property <string> f-lpath;
+    in property <bool> dirty;
+    in property <bool> busy;
+    in property <bool> connecting;
+    in property <bool> invalid-port;
+    // No other dialog above this one (a delete confirm, a trust prompt).
+    in property <bool> top: true;
+
+    callback pick(int);
+    callback new-site();
+    callback edited();
+    callback protocol-picked(int);
+    callback forget-password();
+    callback browse-key();
+    callback browse-local();
+    callback save();
+    callback delete();
+    callback connect();
+    callback close();
+
+    accessible-role: groupbox;
+    accessible-label: "Sites";
+
+    // Enter in any field connects, as the form's submit did.
+    function submit() {
+        if (!root.busy && !root.connecting) {
+            root.connect();
+        }
+    }
+    // A new site starts at the Host field; a saved one leaves the keyboard on the dialog.
+    function take-focus() {
+        if (root.current < 0) {
+            host.focus-input();
+        } else {
+            fs.focus();
+        }
+    }
+    changed top => {
+        if (root.top) {
+            fs.focus();
+        }
+    }
+    init => {
+        if (root.top) {
+            root.take-focus();
+        }
+    }
+
+    Rectangle {
+        background: Theme.scrim;
+        // A click here does nothing (the family's rule: only About closes on a scrim click), so a
+        // stray click beside the panel never drops a half-typed site (copy-ux M4).
+        TouchArea {
+            scroll-event(e) => { accept } // the wheel stops here too: the lists behind stay put
+        }
+    }
+    // Around the panel, so Escape from any field or button comes up to it.
+    fs := FocusScope {
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.close();
+                return accept;
+            }
+            reject
+        }
+    Chamfer {
+        x: (root.width - self.width) / 2;
+        y: Math.max(20px, (root.height - self.height) / 2.4);
+        width: Math.min(780px, root.width - 40px);
+        height: Math.min(540px, root.height - 40px);
+        cut: Theme.cut;
+        fill: Theme.surface;
+        stroke: Theme.line-strong;
+        TouchArea { }   // clicks inside the panel do not close it
+
+        HorizontalLayout {
+            padding: 1px;
+            // ---- the list ----
+            Rectangle {
+                width: 224px;
+                background: Theme.bg;
+                VerticalLayout {
+                    Rectangle {
+                        height: 44px;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 8px;
+                            Text { text: "Sites"; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    inert: !root.top;
+                                    icon: Icons.plus;
+                                    label: "New site";
+                                    tooltip: "New site";
+                                    clicked => {
+                                        root.new-site();
+                                        host.focus-input();
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                    }
+                    ListView {
+                        for s[i] in root.sites: Rectangle {
+                            height: 40px;
+                            background: i == root.current ? Theme.accent-soft : sta.has-hover ? Theme.surface-2 : transparent;
+                            accessible-role: list-item;
+                            accessible-label: s.name;
+                            accessible-item-selected: i == root.current;
+                            accessible-action-default => { root.pick(i); }
+                            if i == root.current: Rectangle { x: 0; width: 2px; background: Theme.accent; }
+                            VerticalLayout {
+                                padding-left: 14px;
+                                padding-right: 10px;
+                                alignment: center;
+                                Text { text: s.name; font-size: Type.small; color: Theme.ink; overflow: elide; }
+                                Text { text: s.detail; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                            }
+                            sta := TouchArea { clicked => { root.pick(i); } }
+                        }
+                    }
+                    if root.current < 0: Rectangle {
+                        height: 40px;
+                        background: Theme.accent-soft;
+                        Rectangle { x: 0; width: 2px; background: Theme.accent; }
+                        Text { x: 14px; text: "New site"; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                    }
+                    if root.note != "": VerticalLayout {
+                        padding-left: 14px;
+                        padding-right: 10px;
+                        padding-top: 8px;
+                        padding-bottom: 10px;
+                        Text { text: root.note; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+                    }
+                }
+                Rectangle { x: parent.width - 1px; width: 1px; background: Theme.line; }
+            }
+
+            // ---- the form ----
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Rectangle {
+                    height: 44px;
+                    HorizontalLayout {
+                        padding-left: 18px;
+                        padding-right: 8px;
+                        Text { text: root.heading; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                        VerticalLayout {
+                            alignment: center;
+                            IconButton { inert: !root.top; icon: Icons.x; label: "Close"; clicked => { root.close(); } }
+                        }
+                    }
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                }
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+                    vertical-stretch: 1;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Name"; }
+                        Field { inert: !root.top; a11y-name: "Name"; accepted => { root.submit(); } placeholder: "optional"; text <=> root.f-name; edited => { root.edited(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Protocol"; }
+                        Segmented {
+                            inert: !root.top;
+                            label: "Protocol";
+                            options: ["SFTP", "FTPS", "FTP"];
+                            selected: root.f-protocol;
+                            controlled: true;
+                            changed(i) => { root.protocol-picked(i); }
+                        }
+                        Hint { text: root.f-protocol == 0 ? "SSH, encrypted" : root.f-protocol == 1 ? "FTP over TLS" : "Plain text, no encryption"; }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Host"; }
+                        host := Field { inert: !root.top; a11y-name: "Host"; accepted => { root.submit(); } placeholder: "ftp.example.com"; mono: true; text <=> root.f-host; edited => { root.edited(); } }
+                        Field { inert: !root.top; a11y-name: "Port"; accepted => { root.submit(); } width: 84px; horizontal-stretch: 0; placeholder: "Port"; mono: true; invalid: root.invalid-port; text <=> root.f-port; edited => { root.edited(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Username"; }
+                        Field { inert: !root.top; a11y-name: "Username"; accepted => { root.submit(); } placeholder: root.f-protocol == 0 ? "" : "empty = anonymous"; mono: true; text <=> root.f-user; edited => { root.edited(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: root.f-protocol == 0 && root.f-key != "" ? "Passphrase" : "Password"; }
+                        Field { inert: !root.top; accepted => { root.submit(); }
+                            a11y-name: root.f-protocol == 0 && root.f-key != "" ? "Passphrase" : "Password";
+                            password: true;
+                            mono: true;
+                            text <=> root.f-pass;
+                            placeholder: root.f-protocol == 0 && root.f-key != ""
+                                ? (root.f-has-password && !root.f-clear-password ? "saved, or none needed" : "asked if the key has one")
+                                : (root.f-has-password && !root.f-clear-password ? "saved in the keychain" : "not saved, will ask");
+                            edited => { root.edited(); }
+                        }
+                        if root.f-has-password && !root.f-clear-password: Button { inert: !root.top; text: "Forget"; clicked => { root.forget-password(); } }
+                    }
+                    if root.f-protocol == 0: HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Private key"; }
+                        Field { inert: !root.top; a11y-name: "Private key"; accepted => { root.submit(); } placeholder: "optional, ~/.ssh/id_ed25519"; mono: true; text <=> root.f-key; edited => { root.edited(); } }
+                        Button { inert: !root.top; text: "Browse"; clicked => { root.browse-key(); } }
+                    }
+                    if root.f-protocol != 0: HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Data mode"; }
+                        Segmented {
+                            inert: !root.top;
+                            label: "Data mode";
+                            options: ["Passive", "Active"];
+                            selected <=> root.f-mode;
+                            changed => { root.edited(); }
+                        }
+                        Hint { text: root.f-mode == 0 ? "works through NAT and firewalls" : "the server dials back; needs an open inbound port"; }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Connections"; }
+                        Select { inert: !root.top;
+                            label: "Connections";
+                            width: 110px;
+                            options: [root.f-protocol == 0 ? "Auto (4)" : "Auto (2)", "1", "2", "3", "4", "6", "8"];
+                            selected <=> root.f-parallel;
+                            changed => { root.edited(); }
+                        }
+                        Hint { text: "one browses, the rest transfer. Shared hosts often cap FTP at 2"; }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Remote folder"; }
+                        Field { inert: !root.top; a11y-name: "Remote folder"; accepted => { root.submit(); } placeholder: "optional, otherwise the last one visited"; mono: true; text <=> root.f-rpath; edited => { root.edited(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Label { text: "Local folder"; }
+                        Field { inert: !root.top; a11y-name: "Local folder"; accepted => { root.submit(); } placeholder: "optional"; mono: true; text <=> root.f-lpath; edited => { root.edited(); } }
+                        Button { inert: !root.top; text: "Browse"; clicked => { root.browse-local(); } }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+                Rectangle {
+                    height: 52px;
+                    Rectangle { y: 0; height: 1px; background: Theme.line; }
+                    HorizontalLayout {
+                        padding-left: 18px;
+                        padding-right: 14px;
+                        spacing: 8px;
+                        if root.current >= 0: VerticalLayout {
+                            alignment: center;
+                            Button { inert: !root.top; text: "Delete"; icon: Icons.trash; kind: ButtonKind.ghost; clicked => { root.delete(); } }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        VerticalLayout {
+                            alignment: center;
+                            Button { inert: !root.top; text: "Save"; enabled: !root.busy && root.dirty; clicked => { root.save(); } }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Button { inert: !root.top; text: "Connect"; icon: Icons.plug; kind: ButtonKind.primary; enabled: !root.busy && !root.connecting; clicked => { root.connect(); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    }
+}

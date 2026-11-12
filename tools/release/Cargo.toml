@@ -1,0 +1,28 @@
+[package]
+name = "vibeftp-release"
+version = "0.2.0-preview"
+description = "Release tooling: the release key (keygen), minisign signatures (with the version and file name in the signed trusted comment) and the update manifest. Never shipped."
+authors = ["Ted K. Johansen"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/tedkj/vibeftp"
+edition = "2024"
+publish = false
+
+[lib]
+name = "vibeftp_release"
+
+[[bin]]
+name = "vibeftp-release"
+path = "src/main.rs"
+
+# All already in the tree, at the audited versions: no new crates for release tooling.
+[dependencies]
+base64 = "0.22"
+blake2 = "0.11"
+ed25519-dalek = "3.0"
+# keygen's randomness (the key, its number, the scrypt salt) from the OS.
+getrandom = "0.4"
+# The app's own verifier, so `verify` checks a release exactly as a client will.
+minisign-verify = "0.3"
+scrypt = { version = "0.12", default-features = false }
+serde_json = "1"

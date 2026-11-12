@@ -1,0 +1,522 @@
+// One file pane (local or remote). It draws; the Rust controller decides. Keys, clicks and drags
+// go out as callbacks, rows come in through `items` (a model over the pane's sorted view).
+
+import { ListView } from "std-widgets.slint";
+import { Theme, Type, Icons, Icon, Chamfer, Button, ButtonKind, IconButton, Field, Select } from "@vibeware";
+
+export struct FileItem {
+    name: string,
+    path: string,
+    size: string,
+    modified: string,
+    is-dir: bool,
+    is-link: bool,
+    selected: bool,
+    cursor: bool,
+}
+
+component FileRow {
+    in property <FileItem> item;
+    in property <bool> focused;
+    in property <bool> drop-target;
+    in property <bool> dragging-any;
+    callback pressed(bool, bool);
+    callback released();
+    callback opened();
+    callback context(length, length);
+    callback drag-moved(length, length);
+    callback drag-ended(length, length);
+    height: Theme.row-h;
+    // One accessibility node per row: the texts inside are not nodes of their own (a scroll
+    // rebuilds every visible row's nodes; four per row made that most of the scroll cost).
+    accessible-role: list-item;
+    accessible-label: root.item.name;
+    accessible-description: root.item.is-dir ? "folder" : root.item.size + ", " + root.item.modified;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.item.selected;
+    accessible-action-default => { root.opened(); }
+
+    property <bool> dragging;
+
+    Rectangle {
+        background: root.drop-target ? Theme.accent-soft : root.item.selected ? Theme.accent-soft
+            : ta.has-hover && !root.dragging-any ? Theme.surface-2 : transparent;
+        border-width: (root.item.cursor && root.focused) || root.drop-target ? 1px : 0;
+        border-color: Theme.accent;
+    }
+    if root.item.selected: Rectangle {
+        x: 0;
+        width: 2px;
+        background: Theme.accent;
+    }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                path: root.item.is-dir ? Icons.folder : Icons.file;
+                tint: root.item.is-dir ? Theme.accent : Theme.ink-3;
+            }
+        }
+        // A link (file or folder) carries the link mark right after its name.
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            spacing: 4px;
+            name-text := Text {
+                text: root.item.name;
+                accessible-role: none;
+                overflow: elide;
+                color: Theme.ink;
+                font-size: Type.small;
+                font-weight: Type.regular;
+                vertical-alignment: center;
+            }
+            if root.item.is-link: VerticalLayout {
+                alignment: center;
+                link-mark := Icon { path: Icons.link; tint: Theme.ink-3; }
+            }
+        }
+        Text {
+            text: root.item.size;
+            accessible-role: none;
+            width: 76px;
+            horizontal-alignment: right;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.item.modified;
+            accessible-role: none;
+            width: 128px;
+            horizontal-alignment: right;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.dragging = false;
+                root.pressed(e.modifiers.control, e.modifiers.shift);
+            }
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                root.context(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+            }
+            if (e.kind == PointerEventKind.up && root.dragging) {
+                root.dragging = false;
+                root.drag-ended(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                if (!root.dragging && (Math.abs(self.mouse-x - self.pressed-x) > 6px || Math.abs(self.mouse-y - self.pressed-y) > 6px)) {
+                    root.dragging = true;
+                }
+                if (root.dragging) {
+                    root.drag-moved(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+                }
+            }
+        }
+        clicked => { root.released(); }
+        double-clicked => { root.opened(); }
+    }
+}
+
+component SortHead inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> asc;
+    in property <bool> right;
+    in property <bool> inert;
+    callback clicked();
+    accessible-role: button;
+    accessible-label: "Sort by " + root.text;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: fs;
+    border-width: fs.has-focus ? 1px : 0;
+    border-color: Theme.focus;
+    // A Tab stop, like a button: Enter or Space sorts.
+    fs := FocusScope {
+        focus-on-tab-navigation: !root.inert;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (!root.inert && (e.text == Key.Return || e.text == " ")) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    HorizontalLayout {
+        alignment: root.right ? end : start;
+        spacing: 4px;
+        Text {
+            text: root.text;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: sta.has-hover || root.active ? Theme.ink-2 : Theme.ink-3;
+            vertical-alignment: center;
+        }
+        if root.active: VerticalLayout {
+            alignment: center;
+            Icon {
+                path: root.asc ? Icons.chevron-up : Icons.chevron-down;
+                tint: Theme.ink-3;
+            }
+        }
+    }
+    sta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// The filter field keeps following the controller's filter after typing (a navigation clears it).
+component FilterField inherits Field {
+    in property <string> value;
+    text: root.value;
+    changed value => { root.text = root.value; }
+}
+
+export component PaneView inherits Rectangle {
+    // ---- in from the controller ----
+    in property <string> name;          // "LOCAL" / "REMOTE"
+    in property <string> title;         // "Local" or the site's name
+    in property <bool> remote;
+    in property <string> path;
+    in property <[FileItem]> items;
+    in property <[string]> roots;
+    in property <int> root-index;
+    in property <bool> offline;
+    in property <bool> loading;
+    in property <string> filter-text;
+    in property <bool> show-filter;
+    in property <int> sort-key;         // 0 name, 1 size, 2 modified
+    in property <bool> sort-asc;
+    in property <bool> can-transfer;
+    in property <string> counts;
+    in property <string> selection;     // "1 selected · 2.1 MB", or ""
+    in property <string> perms;         // "rwxr-xr-x 755" for one remote file, or ""
+    in property <int> cursor-index: -1;
+    in property <int> scroll-seq;       // bumped when a cursor move should bring it into view
+    in property <bool> drop-hover;      // something is being dragged over this pane
+    in property <string> drop-path;     // the folder row it would land in
+    in property <bool> dragging-any;
+    // A dialog is open: nothing here takes the keyboard.
+    in property <bool> inert;
+
+    // ---- out to the controller ----
+    callback navigate(string);
+    callback up();
+    callback refresh();
+    callback mkdir();
+    callback open-filter();
+    callback filter-edited(string);
+    callback filter-closed();
+    callback transfer();
+    callback sort(int);
+    callback root-picked(int);
+    callback row-pressed(int, bool, bool);
+    callback row-clicked(int);
+    callback row-opened(int);
+    callback row-context(int, length, length);
+    callback blank-pressed();
+    callback blank-context(length, length);
+    // text, ctrl, shift, alt, repeat, rows per page
+    callback list-key(string, bool, bool, bool, bool, int) -> bool;
+    callback drag-moved(length, length);
+    callback drag-ended(length, length);
+    callback open-sites();
+
+    public function focus-list() {
+        list-focus.focus();
+    }
+
+    /// The view row at a window position, or -1 (the drag code asks).
+    public function row-at(x: length, y: length) -> int {
+        if (x < list.absolute-position.x || x >= list.absolute-position.x + list.width
+            || y < list.absolute-position.y || y >= list.absolute-position.y + list.height) {
+            return -1;
+        }
+        let i = Math.floor((y - list.absolute-position.y - list.content-y) / Theme.row-h);
+        i < root.items.length ? i : -1
+    }
+
+    public function contains(x: length, y: length) -> bool {
+        x >= root.absolute-position.x && x < root.absolute-position.x + root.width
+            && y >= root.absolute-position.y && y < root.absolute-position.y + root.height
+    }
+
+    // No background of its own: the window's is the pane colour (one fill per frame, not two).
+    accessible-role: groupbox;
+    accessible-label: root.name;
+
+    changed path => {
+        list.content-y = 0;
+        // Typing into the field replaces its binding: put the folder on screen back explicitly.
+        path-field.text = root.path;
+    }
+    changed scroll-seq => {
+        if (root.cursor-index >= 0) {
+            let top = root.cursor-index * Theme.row-h;
+            if (top < -list.content-y) {
+                list.content-y = -top;
+            } else if (top + Theme.row-h > -list.content-y + list.visible-height) {
+                list.content-y = -(top + Theme.row-h - list.visible-height);
+            }
+        }
+    }
+
+    VerticalLayout {
+        // Header.
+        Rectangle {
+            height: 40px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        path: root.remote ? Icons.server : Icons.drive;
+                        tint: Theme.ink-2;
+                    }
+                }
+                Text {
+                    text: root.title;
+                    max-width: 160px;
+                    overflow: elide;
+                    font-size: Type.small;
+                    font-weight: Type.strong;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                }
+                if !root.remote && root.roots.length > 1: VerticalLayout {
+                    alignment: center;
+                    Select { inert: root.inert;
+                        label: "Drive";
+                        options: root.roots;
+                        selected: root.root-index;
+                        controlled: true;
+                        mono: true;
+                        width: 64px;
+                        changed(i) => { root.root-picked(i); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    path-field := Field { inert: root.inert;
+                        label: "";
+                        placeholder: root.offline ? "" : "Path";
+                        text: root.path;
+                        mono: true;
+                        enabled: !root.offline;
+                        accepted(t) => {
+                            root.navigate(t);
+                            list-focus.focus();
+                        }
+                        // Leaving the field, or Escape, puts the folder on screen back.
+                        escaped => {
+                            self.text = root.path;
+                            list-focus.focus();
+                            false
+                        }
+                        blurred => { self.text = root.path; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { inert: root.inert; icon: Icons.up; label: "Up"; tooltip: "Up (Backspace)"; enabled: !root.offline; clicked => { root.up(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    // While the folder loads the icon turns a quarter every 150 ms (the clock is
+                    // read only then, so an idle pane asks for no frames).
+                    IconButton { inert: root.inert;
+                        icon: root.loading ? Icons.refresh-turns[Math.mod(Math.floor(animation-tick() / 150ms), 4)] : Icons.refresh;
+                        label: "Refresh";
+                        tooltip: "Refresh (Ctrl+R)";
+                        enabled: !root.offline;
+                        clicked => { root.refresh(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { inert: root.inert; icon: Icons.folder-plus; label: "New folder"; tooltip: "New folder (F7)"; enabled: !root.offline; clicked => { root.mkdir(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { inert: root.inert; icon: Icons.search; label: "Filter"; tooltip: "Filter (Ctrl+F)"; enabled: !root.offline; clicked => { root.open-filter(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert;
+                        text: root.remote ? "Download" : "Upload";
+                        icon: root.remote ? Icons.download : Icons.upload;
+                        kind: ButtonKind.primary;
+                        enabled: root.can-transfer;
+                        tooltip: root.remote ? "Download selected (F5)" : "Upload selected (F5)";
+                        clicked => { root.transfer(); }
+                    }
+                }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+        }
+
+        // Filter bar.
+        if root.show-filter: Rectangle {
+            height: 34px;
+            background: Theme.bg;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon { path: Icons.search; tint: Theme.ink-3; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    filter-field := FilterField {
+                        inert: root.inert;
+                        label: "";
+                        placeholder: "Filter this folder…";
+                        value: root.filter-text;
+                        edited(t) => { root.filter-edited(t); }
+                        accepted => { list-focus.focus(); }
+                        escaped => {
+                            root.filter-closed();
+                            list-focus.focus();
+                            false
+                        }
+                        init => { self.focus-input(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { inert: root.inert; icon: Icons.x; label: "Close filter"; clicked => { root.filter-closed(); list-focus.focus(); } }
+                }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+        }
+
+        // Column heads.
+        Rectangle {
+            height: 24px;
+            HorizontalLayout {
+                padding-left: 34px;
+                padding-right: 10px;
+                spacing: 8px;
+                SortHead { inert: root.inert; text: "NAME"; horizontal-stretch: 1; active: root.sort-key == 0; asc: root.sort-asc; clicked => { root.sort(0); } }
+                SortHead { inert: root.inert; text: "SIZE"; width: 76px; right: true; active: root.sort-key == 1; asc: root.sort-asc; clicked => { root.sort(1); } }
+                SortHead { inert: root.inert; text: "MODIFIED"; width: 128px; right: true; active: root.sort-key == 2; asc: root.sort-asc; clicked => { root.sort(2); } }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+        }
+
+        // The list.
+        Rectangle {
+            vertical-stretch: 1;
+            list-focus := FocusScope {
+                accessible-role: AccessibleRole.list;
+                accessible-label: root.name + " files";
+                enabled: !root.offline;
+                focus-on-tab-navigation: !root.inert;
+                key-pressed(e) => {
+                    if (root.list-key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt, e.repeat,
+                        Math.max(1, Math.floor(list.visible-height / Theme.row-h) - 1))) {
+                        return accept;
+                    }
+                    reject
+                }
+                // Clicks on the empty area below the rows.
+                TouchArea {
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                            list-focus.focus();
+                            root.blank-pressed();
+                        }
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                            root.blank-context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+                // ListView instantiates only the rows on screen: 20 000 entries cost what 30 do.
+                list := ListView {
+                    for item[i] in root.items: FileRow {
+                        item: item;
+                        focused: list-focus.has-focus;
+                        drop-target: root.drop-hover && root.drop-path != "" && item.path == root.drop-path;
+                        dragging-any: root.dragging-any;
+                        pressed(ctrl, shift) => {
+                            list-focus.focus();
+                            root.row-pressed(i, ctrl, shift);
+                        }
+                        released => { root.row-clicked(i); }
+                        opened => { root.row-opened(i); }
+                        context(x, y) => { root.row-context(i, x, y); }
+                        drag-moved(x, y) => { root.drag-moved(x, y); }
+                        drag-ended(x, y) => { root.drag-ended(x, y); }
+                    }
+                }
+                Rectangle {
+                    border-width: list-focus.has-focus ? 1px : 0;
+                    border-color: Theme.focus.with-alpha(0.35);
+                }
+            }
+
+            if root.offline: VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: center;
+                    Icon { path: Icons.server; tint: Theme.ink-3; }
+                }
+                Text {
+                    text: "Not connected";
+                    horizontal-alignment: center;
+                    color: Theme.ink-3;
+                    font-size: Type.small;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Open sites"; kind: ButtonKind.primary; clicked => { root.open-sites(); } }
+                }
+            }
+            if !root.offline && !root.loading && root.items.length == 0: Text {
+                text: root.filter-text != "" ? "No matches" : "Empty folder";
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                color: Theme.ink-3;
+                font-size: Type.small;
+            }
+            // A drop over the pane itself (not a folder row) lands in the folder on screen.
+            if root.drop-hover && root.drop-path == "": Rectangle {
+                border-width: 2px;
+                border-color: Theme.accent;
+            }
+        }
+
+        // Footer.
+        Rectangle {
+            height: 26px;
+            Rectangle { y: 0; height: 1px; background: Theme.line; }
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 12px;
+                Text { text: root.offline ? "" : root.counts; color: Theme.ink-3; font-size: Type.small; vertical-alignment: center; }
+                Text { text: root.perms; font-family: Type.mono; color: Theme.ink-3; font-size: Type.small; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.selection; color: Theme.ink-2; font-size: Type.small; vertical-alignment: center; }
+            }
+        }
+    }
+}

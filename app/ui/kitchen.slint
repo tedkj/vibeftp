@@ -1,0 +1,698 @@
+// Kitchen sink: every VibeWare control in context, for Ted's review and for the UI test harness.
+
+import {
+    Theme, Type, Icons, Icon, Chamfer, Mark, SectionLabel, TipBox, TipLayer, ButtonKind, Button, IconButton, Kbd,
+    Field, Checkbox, Radio, RadioGroup, Segmented, MenuEntry, MenuList, Menu, Select, DialogPanel, Dialog, ToastKind, Toast,
+    ProgressBar, LinkState, Glyph
+} from "@vibeware";
+
+// Re-exported so Rust can switch the theme.
+export { Theme, Tips } from "@vibeware";
+
+export struct Row {
+    name: string,
+    size: string,
+    modified: string,
+    is-dir: bool,
+}
+
+// One file-list row. States: hover, selected, cursor (keyboard position), drop target.
+component FileRow {
+    in property <Row> item;
+    in property <bool> selected;
+    in property <bool> cursor;
+    in property <bool> drop-target;
+    callback pressed();
+    callback drag-moved(length, length);
+    callback drag-ended(length, length);
+    height: Theme.row-h;
+    accessible-role: list-item;
+    accessible-label: root.item.name;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => { root.pressed(); }
+
+    property <bool> dragging;
+
+    Rectangle {
+        background: root.drop-target ? Theme.accent-soft : root.selected ? Theme.accent-soft : ta.has-hover ? Theme.surface-2 : transparent;
+        border-width: root.cursor || root.drop-target ? 1px : 0;
+        border-color: Theme.accent;
+    }
+    if root.selected: Rectangle {
+        x: 0;
+        width: 2px;
+        background: Theme.accent;
+    }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                path: root.item.is-dir ? Icons.folder : Icons.file;
+                tint: root.item.is-dir ? Theme.accent : Theme.ink-3;
+            }
+        }
+        Text {
+            text: root.item.name;
+            horizontal-stretch: 1;
+            overflow: elide;
+            color: Theme.ink;
+            font-size: Type.small;
+            font-weight: Type.regular;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.item.size;
+            width: 76px;
+            horizontal-alignment: right;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.item.modified;
+            width: 128px;
+            horizontal-alignment: right;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.dragging = false;
+                root.pressed();
+            }
+            if (e.kind == PointerEventKind.up && root.dragging) {
+                root.dragging = false;
+                root.drag-ended(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                if (!root.dragging && (Math.abs(self.mouse-x - self.pressed-x) > 6px || Math.abs(self.mouse-y - self.pressed-y) > 6px)) {
+                    root.dragging = true;
+                }
+                if (root.dragging) {
+                    root.drag-moved(root.absolute-position.x + self.mouse-x, root.absolute-position.y + self.mouse-y);
+                }
+            }
+        }
+    }
+}
+
+component ColumnHeads inherits Rectangle {
+    height: 24px;
+    HorizontalLayout {
+        padding-left: 34px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text { text: "NAME"; horizontal-stretch: 1; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        Text { text: "SIZE"; width: 76px; horizontal-alignment: right; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        Text { text: "MODIFIED"; width: 128px; horizontal-alignment: right; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+}
+
+component Swatch inherits VerticalLayout {
+    in property <color> c;
+    in property <string> name;
+    spacing: 4px;
+    Chamfer {
+        width: 62px;
+        height: 30px;
+        fill: root.c;
+        stroke: Theme.line-strong;
+    }
+    Text { text: root.name; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; }
+}
+
+component IconCell inherits VerticalLayout {
+    in property <string> path;
+    in property <string> name;
+    width: 76px;
+    spacing: 4px;
+    alignment: start;
+    HorizontalLayout {
+        alignment: center;
+        Icon { path: root.path; tint: Theme.ink; }
+    }
+    Text { text: root.name; horizontal-alignment: center; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+}
+
+export component KitchenSink inherits Window {
+    title: "VibeWare · kitchen sink";
+    preferred-width: 1280px;
+    preferred-height: 1480px;
+    background: Theme.bg;
+    default-font-family: Type.ui;
+    default-font-size: Type.small;
+    default-font-weight: Type.regular;
+
+    // Harness state (the tests read these).
+    in-out property <string> last-action: "none";
+    in-out property <[Row]> list-a;
+    in-out property <[Row]> list-b;
+    in-out property <int> cursor-a: 0;
+    in-out property <[int]> selected-a;
+    in-out property <string> host-text;
+    in-out property <bool> passive: true;
+    in-out property <int> protocol: 0;
+    in-out property <int> connections: 0;
+    in-out property <bool> dialog-open;
+    in-out property <bool> drop-over-b;
+    in-out property <int> trust-choice: -1;
+
+    callback action(string);
+    callback moved-to-b(int);
+    callback activated-a(int);
+
+    property <bool> dragging;
+    property <length> drag-x;
+    property <length> drag-y;
+    property <string> drag-name;
+    property <int> drag-index: -1;
+
+    function over-b(x: length, y: length) -> bool {
+        x >= list-b-box.absolute-position.x && x < list-b-box.absolute-position.x + list-b-box.width
+            && y >= list-b-box.absolute-position.y && y < list-b-box.absolute-position.y + list-b-box.height
+    }
+
+    VerticalLayout {
+        padding: 28px;
+        spacing: 22px;
+
+        // Header.
+        HorizontalLayout {
+            spacing: 12px;
+            height: 32px;
+            VerticalLayout {
+                alignment: center;
+                Mark { size: 24px; }
+            }
+            Text { text: "VibeWare"; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; vertical-alignment: center; }
+            Text { text: "design system · kitchen sink · slint software renderer"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; }
+            VerticalLayout {
+                alignment: center;
+                Segmented {
+                    label: "Theme";
+                    options: ["Dark", "Light"];
+                    selected: Theme.dark ? 0 : 1;
+                    changed(i) => {
+                        Theme.dark = i == 0;
+                        root.action("theme " + (i == 0 ? "dark" : "light"));
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 36px;
+
+            // ---------------- left column ----------------
+            VerticalLayout {
+                width: 560px;
+                spacing: 14px;
+                alignment: start;
+
+                SectionLabel { index: "01"; text: "TYPE"; }
+                VerticalLayout {
+                    spacing: 6px;
+                    Text { text: "Dense UI · 12 / 450 · Upload selected files (F5) · 1 234 files, 56.7 MB"; font-size: Type.small; font-weight: Type.regular; color: Theme.ink; }
+                    Text { text: "Emphasis · 12 / 600 · Synchronized browsing on"; font-size: Type.small; font-weight: Type.strong; color: Theme.ink; }
+                    Text { text: "Dialog body · 14 / 450 · The server identifies itself with this key."; font-size: Type.body; font-weight: Type.regular; color: Theme.ink; }
+                    Text { text: "Heading · 14 / 600 · First connection to sftp.example.com"; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; }
+                    Text { text: "/var/www/html/wp-content/uploads   4.0 MB   2026-10-16 13:54"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-2; }
+                    Text { text: "SHA256:k8Fz3QvJ9w0N2xYtLp4mR7aE5cD1bG6hU0iO2s"; font-family: Type.mono; font-size: Type.body; color: Theme.ink-2; }
+                }
+
+                SectionLabel { index: "02"; text: "COLOUR"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Swatch { c: Theme.bg; name: "bg"; }
+                    Swatch { c: Theme.surface; name: "surface"; }
+                    Swatch { c: Theme.surface-3; name: "raised"; }
+                    Swatch { c: Theme.ink; name: "ink"; }
+                    Swatch { c: Theme.ink-3; name: "ink-3"; }
+                    Swatch { c: Theme.accent; name: "accent"; }
+                    Swatch { c: Theme.ok; name: "ok"; }
+                    Swatch { c: Theme.danger; name: "danger"; }
+                }
+
+                SectionLabel { index: "03"; text: "BUTTONS"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Button { text: "Connect"; icon: Icons.plug; kind: ButtonKind.primary; clicked => { root.action("connect"); } }
+                    Button { text: "Save"; clicked => { root.action("save"); } }
+                    Button { text: "Cancel"; kind: ButtonKind.ghost; clicked => { root.action("cancel"); } }
+                    Button { text: "Delete"; icon: Icons.trash; kind: ButtonKind.danger; clicked => { root.action("delete"); } }
+                    Button { text: "Disabled"; enabled: false; clicked => { root.action("disabled"); } }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    alignment: start;
+                    IconButton { icon: Icons.up; label: "Up"; tooltip: "Up (Backspace)"; clicked => { root.action("up"); } }
+                    IconButton { icon: Icons.refresh; label: "Refresh"; tooltip: "Refresh (Ctrl+R)"; clicked => { root.action("refresh"); } }
+                    IconButton { icon: Icons.folder-plus; label: "New folder"; tooltip: "New folder (F7)"; clicked => { root.action("mkdir"); } }
+                    IconButton { icon: Icons.search; label: "Filter"; tooltip: "Filter (Ctrl+F)"; clicked => { root.action("filter"); } }
+                    IconButton { icon: Icons.bookmark; label: "Bookmarks"; tooltip: "Bookmarks"; clicked => { root.action("bookmarks"); } }
+                    IconButton { icon: Icons.sync; label: "Sync browsing"; tooltip: "Synchronized browsing"; clicked => { root.action("sync"); } }
+                    IconButton { icon: Icons.terminal; label: "Log"; tooltip: "Protocol log"; clicked => { root.action("log"); } }
+                    IconButton { icon: Icons.menu; label: "Menu"; tooltip: "Menu"; clicked => { root.action("menu"); } }
+                    Rectangle { width: 12px; }
+                    VerticalLayout {
+                        alignment: center;
+                        TipBox { text: "Refresh (Ctrl+R)"; }
+                    }
+                }
+
+                SectionLabel { index: "04"; text: "INPUTS"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Field { label: "HOST"; placeholder: "ftp.example.com"; mono: true; text <=> root.host-text; accepted(t) => { root.action("host " + t); } }
+                    Field { label: "PORT"; text: "22"; mono: true; width: 96px; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Field { label: "PASS"; text: "hunter22"; password: true; }
+                    Field { placeholder: "not a port (1-65535)"; text: "70000"; invalid: true; mono: true; }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    alignment: start;
+                    Segmented {
+                        label: "Protocol";
+                        options: ["SFTP", "FTPS", "FTP"];
+                        selected <=> root.protocol;
+                        changed(i) => { root.action("protocol " + i); }
+                    }
+                    Select {
+                        label: "Connections";
+                        options: ["Auto (4)", "1", "2", "3", "4", "6", "8"];
+                        selected <=> root.connections;
+                        width: 110px;
+                        changed(i) => { root.action("connections " + i); }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Checkbox { text: "Passive mode"; checked <=> root.passive; toggled(v) => { root.action("passive " + (v ? "on" : "off")); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Checkbox { text: "Disabled"; checked: true; enabled: false; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 28px;
+                    alignment: start;
+                    RadioGroup {
+                        label: "Trust choice";
+                        options: ["Trust this key", "Don't connect, I'll check with the owner"];
+                        selected <=> root.trust-choice;
+                        changed(i) => { root.action("trust choice " + i); }
+                    }
+                    VerticalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Radio { text: "Chosen"; checked: true; }
+                        Radio { text: "Disabled"; enabled: false; }
+                        Radio { text: "Disabled, chosen"; checked: true; enabled: false; }
+                    }
+                }
+
+                SectionLabel { index: "05"; text: "ICONS"; }
+                VerticalLayout {
+                    spacing: 12px;
+                    HorizontalLayout {
+                        alignment: start;
+                        IconCell { path: Icons.folder; name: "folder"; }
+                        IconCell { path: Icons.folder-plus; name: "folder+"; }
+                        IconCell { path: Icons.folder-open; name: "reveal"; }
+                        IconCell { path: Icons.file; name: "file"; }
+                        IconCell { path: Icons.link; name: "link"; }
+                        IconCell { path: Icons.up; name: "up"; }
+                        IconCell { path: Icons.download; name: "download"; }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        IconCell { path: Icons.upload; name: "upload"; }
+                        IconCell { path: Icons.transfers; name: "transfers"; }
+                        IconCell { path: Icons.refresh; name: "refresh"; }
+                        IconCell { path: Icons.search; name: "search"; }
+                        IconCell { path: Icons.server; name: "server"; }
+                        IconCell { path: Icons.drive; name: "drive"; }
+                        IconCell { path: Icons.trash; name: "trash"; }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        IconCell { path: Icons.pencil; name: "rename"; }
+                        IconCell { path: Icons.edit; name: "edit"; }
+                        IconCell { path: Icons.settings; name: "settings"; }
+                        IconCell { path: Icons.theme; name: "theme"; }
+                        IconCell { path: Icons.plug; name: "plug"; }
+                        IconCell { path: Icons.unplug; name: "unplug"; }
+                        IconCell { path: Icons.key; name: "key"; }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        IconCell { path: Icons.lock; name: "lock"; }
+                        IconCell { path: Icons.alert; name: "alert"; }
+                        IconCell { path: Icons.info; name: "info"; }
+                        IconCell { path: Icons.update; name: "update"; }
+                        IconCell { path: Icons.bookmark; name: "bookmark"; }
+                        IconCell { path: Icons.sync; name: "sync"; }
+                        IconCell { path: Icons.terminal; name: "log"; }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        IconCell { path: Icons.bar-thick; name: "bar"; }
+                        IconCell { path: Icons.bar-thin; name: "compact"; }
+                        IconCell { path: Icons.external; name: "external"; }
+                        IconCell { path: Icons.code; name: "code"; }
+                        IconCell { path: Icons.check; name: "check"; }
+                        IconCell { path: Icons.x; name: "x"; }
+                        IconCell { path: Icons.chevron-down; name: "chevron"; }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        IconCell { path: Icons.copy; name: "copy"; }
+                    }
+                }
+
+                SectionLabel { index: "06"; text: "STATE"; }
+                HorizontalLayout {
+                    spacing: 16px;
+                    alignment: start;
+                    Glyph { state: LinkState.idle; }
+                    Glyph { state: LinkState.connecting; }
+                    Glyph { state: LinkState.connected; }
+                    Glyph { state: LinkState.busy; }
+                    Glyph { state: LinkState.error; }
+                    Glyph { state: LinkState.busy; size: 56px; }
+                    Glyph { state: LinkState.connected; size: 56px; }
+                }
+                VerticalLayout {
+                    spacing: 10px;
+                    ProgressBar { value: 0.35; }
+                    ProgressBar { value: -1; }
+                }
+            }
+
+            // ---------------- right column ----------------
+            VerticalLayout {
+                spacing: 14px;
+                alignment: start;
+                horizontal-stretch: 1;
+
+                SectionLabel { index: "07"; text: "FILE LIST · keyboard + drag source"; }
+                list-a-box := Chamfer {
+                    height: 40px + 24px + 7 * Theme.row-h + 2px + 26px;
+                    fill: Theme.surface;
+                    stroke: Theme.line;
+                    cut: Theme.cut;
+                    VerticalLayout {
+                        padding: 1px;
+                        // Pane header.
+                        Rectangle {
+                            height: 40px;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Icon { path: Icons.drive; tint: Theme.ink-2; }
+                                }
+                                Text { text: "LOCAL"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    Field { text: "C:\\Projects\\VibeFTP"; mono: true; label: ""; placeholder: "Path"; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconButton { icon: Icons.up; label: "Up"; tooltip: "Up (Backspace)"; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Button { text: "Upload"; icon: Icons.upload; kind: ButtonKind.primary; }
+                                }
+                            }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                        }
+                        ColumnHeads { }
+                        list-a := FocusScope {
+                            height: 7 * Theme.row-h + 2px;
+                            accessible-role: list;
+                            accessible-label: "List A";
+                            key-pressed(e) => {
+                                if (e.text == Key.DownArrow) {
+                                    root.cursor-a = Math.min(root.cursor-a + 1, root.list-a.length - 1);
+                                    root.selected-a = [root.cursor-a];
+                                    return accept;
+                                }
+                                if (e.text == Key.UpArrow) {
+                                    root.cursor-a = Math.max(root.cursor-a - 1, 0);
+                                    root.selected-a = [root.cursor-a];
+                                    return accept;
+                                }
+                                if (e.text == Key.Home) {
+                                    root.cursor-a = 0;
+                                    root.selected-a = [0];
+                                    return accept;
+                                }
+                                if (e.text == Key.End) {
+                                    root.cursor-a = root.list-a.length - 1;
+                                    root.selected-a = [root.cursor-a];
+                                    return accept;
+                                }
+                                if (e.text == Key.Return) {
+                                    root.activated-a(root.cursor-a);
+                                    return accept;
+                                }
+                                reject
+                            }
+                            Rectangle {
+                                border-width: list-a.has-focus ? 1px : 0;
+                                border-color: Theme.focus.with-alpha(0.5);
+                            }
+                            VerticalLayout {
+                                padding-top: 1px;
+                                for r[i] in root.list-a: FileRow {
+                                    item: r;
+                                    selected: root.selected-a.length > 0 && root.selected-a[0] == i;
+                                    cursor: list-a.has-focus && i == root.cursor-a;
+                                    pressed => {
+                                        list-a.focus();
+                                        root.cursor-a = i;
+                                        root.selected-a = [i];
+                                    }
+                                    drag-moved(x, y) => {
+                                        root.dragging = true;
+                                        root.drag-index = i;
+                                        root.drag-name = r.name;
+                                        root.drag-x = x;
+                                        root.drag-y = y;
+                                        root.drop-over-b = root.over-b(x, y);
+                                    }
+                                    drag-ended(x, y) => {
+                                        root.dragging = false;
+                                        root.drop-over-b = false;
+                                        if (root.over-b(x, y)) {
+                                            root.moved-to-b(i);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Footer.
+                        Rectangle {
+                            height: 26px;
+                            Rectangle { y: 0; height: 1px; background: Theme.line; }
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                Text { text: "2 folders, 5 files"; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; }
+                                Text { text: "1 selected · 2.1 MB"; color: Theme.ink-2; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+
+                SectionLabel { index: "08"; text: "DROP TARGET · list B"; }
+                list-b-box := Chamfer {
+                    height: 24px + 3 * Theme.row-h + 4px;
+                    fill: Theme.surface;
+                    stroke: root.drop-over-b ? Theme.accent : Theme.line;
+                    stroke-width: root.drop-over-b ? 2px : 1px;
+                    cut: Theme.cut;
+                    accessible-role: list;
+                    accessible-label: "List B";
+                    VerticalLayout {
+                        padding: 1px;
+                        ColumnHeads { }
+                        for r[i] in root.list-b: FileRow {
+                            item: r;
+                            drop-target: false;
+                        }
+                        if root.list-b.length == 0: Text {
+                            text: "Drag a row from the list above into here";
+                            color: Theme.ink-3;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            height: 3 * Theme.row-h;
+                        }
+                    }
+                }
+
+                SectionLabel { index: "09"; text: "FEEDBACK"; }
+                VerticalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Toast { text: "Connected to Local sftpgo (SFTP)"; kind: ToastKind.ok; }
+                    Toast { text: "Not uploaded, your edited copies are kept here:\nnote.txt: C:\\Users\\ted\\AppData\\Local\\…\\note.txt"; kind: ToastKind.error; action: "Show"; action-clicked => { root.action("toast show"); } }
+                    Toast { text: "Synchronized browsing on. Both panes follow each other from here."; kind: ToastKind.info; }
+                }
+
+                SectionLabel { index: "10"; text: "MENU · DIALOG"; }
+                HorizontalLayout {
+                    spacing: 16px;
+                    alignment: start;
+                    Chamfer {
+                        width: 230px;
+                        height: sample-menu.height;
+                        fill: Theme.surface;
+                        stroke: Theme.line-strong;
+                        sample-menu := MenuList {
+                            width: 100%;
+                            current: 1;
+                            entries: [
+                                { label: "Download", icon: Icons.download, shortcut: "F5" },
+                                { label: "Edit", icon: Icons.edit, shortcut: "Enter" },
+                                { label: "Rename", icon: Icons.pencil, shortcut: "F2" },
+                                { label: "Permissions…", icon: Icons.lock },
+                                { separator: true },
+                                { label: "Delete", icon: Icons.trash, shortcut: "Del", danger: true },
+                            ];
+                        }
+                    }
+                    DialogPanel {
+                        width: 330px;
+                        title: "Delete";
+                        Text {
+                            text: "Permanently delete \"report-final.pdf\" from the server?";
+                            wrap: word-wrap;
+                            font-size: Type.body;
+                            color: Theme.ink-2;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+                            Button { text: "Cancel"; kind: ButtonKind.ghost; }
+                            Button { text: "Delete"; kind: ButtonKind.danger; }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    open-menu := Button {
+                        text: "Open menu";
+                        icon: Icons.menu;
+                        clicked => { live-menu.show(); }
+                    }
+                    Button {
+                        text: "Open dialog";
+                        clicked => { root.dialog-open = true; }
+                    }
+                }
+            }
+        }
+    }
+
+    live-menu := Menu {
+        x: open-menu.absolute-position.x;
+        y: open-menu.absolute-position.y + open-menu.height + 4px;
+        entries: [
+            { label: "Open", icon: Icons.folder-open, shortcut: "Enter" },
+            { label: "Copy path", icon: Icons.file, shortcut: "Ctrl+C" },
+            { separator: true },
+            { label: "Remove", icon: Icons.trash, shortcut: "Del", danger: true },
+        ];
+        activated(i) => { root.action("menu " + i); }
+    }
+
+    if root.dialog-open: Dialog {
+        width: root.width;
+        height: root.height;
+        title: "First connection to sftp.example.com";
+        dialog-width: 460px;
+        cancelled => {
+            root.dialog-open = false;
+            root.action("dialog cancel");
+        }
+        accepted => {
+            root.dialog-open = false;
+            root.action("dialog trust");
+        }
+        Text {
+            text: "The server identifies itself with the key\nSHA256:k8Fz3QvJ9w0N2xYtLp4mR7aE5cD1bG6hU0iO2s\n\nTrust it and remember it for this host?";
+            wrap: word-wrap;
+            font-size: Type.body;
+            color: Theme.ink-2;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button {
+                text: "Cancel";
+                kind: ButtonKind.ghost;
+                clicked => {
+                    root.dialog-open = false;
+                    root.action("dialog cancel");
+                }
+            }
+            Button {
+                text: "Trust and connect";
+                kind: ButtonKind.primary;
+                clicked => {
+                    root.dialog-open = false;
+                    root.action("dialog trust");
+                }
+            }
+        }
+    }
+
+    // Drag ghost.
+    if root.dragging: Chamfer {
+        x: root.drag-x + 14px;
+        y: root.drag-y + 10px;
+        width: ghost.preferred-width + 20px;
+        height: 26px;
+        fill: Theme.surface;
+        stroke: Theme.accent;
+        ghost := HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 10px;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Icon { path: Icons.file; tint: Theme.accent; }
+            }
+            Text { text: root.drag-name + (root.drop-over-b ? "  → list B" : ""); color: Theme.ink; vertical-alignment: center; }
+        }
+    }
+
+    TipLayer {
+        width: root.width;
+        height: root.height;
+    }
+}

@@ -1,0 +1,341 @@
+// The top bar: connection state and its Connect / Cancel / Disconnect button, live transfer
+// tiles in the thick mode, and the actions. Sites are picked in the site manager.
+
+import {
+    Theme, Type, Icons, Icon, Chamfer, Mark, Button, ButtonKind, IconButton, MenuEntry, Menu, ProgressBar
+} from "@vibeware";
+import { EditRow, BookmarkRow } from "types.slint";
+
+component Tile inherits Chamfer {
+    in property <string> caption;
+    in property <string> value;
+    in property <string> extra;
+    fill: Theme.surface;
+    stroke: Theme.line;
+    height: 44px;
+    @children
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+        spacing: 1px;
+        Text { text: root.caption; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; }
+        HorizontalLayout {
+            spacing: 6px;
+            Text { text: root.value; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; vertical-alignment: center; }
+            if root.extra != "": Text { text: root.extra; font-size: Type.small; color: Theme.danger; vertical-alignment: center; }
+        }
+    }
+}
+
+component PopupRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> remove-label;
+    callback picked();
+    callback removed();
+    height: root.detail != "" ? 40px : Theme.row-h;
+    background: ta.has-hover ? Theme.surface-3 : transparent;
+    accessible-role: list-item;
+    accessible-label: root.title;
+    accessible-action-default => { root.picked(); }
+    ta := TouchArea { clicked => { root.picked(); } }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 4px;
+        spacing: 6px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text { text: root.title; font-size: Type.small; color: Theme.ink; overflow: elide; }
+            if root.detail != "": Text { text: root.detail; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+        }
+        if root.remove-label != "": VerticalLayout {
+            alignment: center;
+            IconButton { icon: Icons.x; label: root.remove-label; clicked => { root.removed(); } }
+        }
+    }
+}
+
+export component TopBar inherits Rectangle {
+    in property <bool> thick;
+    in property <string> title;
+    in property <string> sub;
+    in property <string> detail;
+    in property <bool> connected;
+    in property <bool> connecting;
+    in property <string> speed;
+    in property <string> sparkline;
+    in property <string> queued;
+    in property <string> done;
+    in property <string> failed;
+    // 0..1, -1 working with unknown size, below -1: nothing running.
+    in property <float> progress: -2;
+    in property <[EditRow]> edits;
+    in property <[BookmarkRow]> bookmarks;
+    in property <bool> sync;
+    in property <bool> log;
+    in property <string> update-version;
+    in property <bool> update-at-start;
+    in property <bool> updating;
+    // A dialog is open: nothing here takes the keyboard.
+    in property <bool> inert;
+
+    callback connect-clicked();
+    callback manage-sites();
+    callback go-bookmark(int);
+    callback remove-bookmark(int);
+    callback add-bookmark();
+    callback stop-editing(int);
+    callback toggle-sync();
+    callback toggle-log();
+    callback toggle-bar();
+    callback toggle-theme();
+    callback toggle-update-at-start();
+    callback check-updates();
+    callback about();
+    callback install-update();
+
+    height: root.thick ? 84px : 48px;
+    background: Theme.bg;
+
+    // Room for the live tiles. Set from a change handler, not bound: the bar's width depends on
+    // what it holds, so a binding on it would be a binding loop.
+    property <bool> roomy: true;
+    changed width => { root.roomy = root.width >= 1000px; }
+
+    // Before a dialog opens (see AppWindow.close-popups).
+    public function close-popups() {
+        main-menu.close();
+        marks-popup.close();
+        edits-popup.close();
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        spacing: 12px;
+
+        // Brand.
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    Mark { size: 18px; }
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 1px;
+                    Text { text: "Vibe"; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; vertical-alignment: center; }
+                    Text { text: "FTP"; font-family: Type.mono; font-size: Type.body; color: Theme.accent; vertical-alignment: center; }
+                }
+            }
+        }
+        Rectangle { width: 4px; }
+
+        // Connection text: it gives way first (elided) when the window is narrow, so the
+        // actions on the right never leave the window.
+        VerticalLayout {
+            alignment: center;
+            min-width: 0px;
+            preferred-width: root.thick ? 330px : 300px;
+            max-width: root.thick ? 330px : 300px;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text { min-width: 0px; text: root.title; font-size: root.thick ? Type.body : Type.small; font-weight: Type.strong; color: Theme.ink; overflow: elide; }
+            Text { min-width: 0px; text: root.sub; font-family: Type.mono; font-size: Type.small; color: Theme.ink-2; overflow: elide; }
+            if root.thick: Text { min-width: 0px; text: root.detail; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+        }
+
+        // Connect uses the site last picked in the site manager, or opens it.
+        VerticalLayout {
+            alignment: center;
+            Button { inert: root.inert;
+                text: root.connecting ? "Cancel" : root.connected ? "Disconnect" : "Connect";
+                icon: root.connected ? Icons.unplug : Icons.plug;
+                kind: root.connected || root.connecting ? ButtonKind.secondary : ButtonKind.primary;
+                clicked => { root.connect-clicked(); }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // Live tiles (thick only, and only when the window has room for them).
+        if root.thick && root.roomy: HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Tile {
+                    width: 168px;
+                    caption: "THROUGHPUT";
+                    value: root.speed;
+                    Path {
+                        x: parent.width - 96px - 10px;
+                        y: (parent.height - 22px) / 2;
+                        width: 96px;
+                        height: 22px;
+                        viewbox-x: 0;
+                        viewbox-y: 0;
+                        viewbox-width: 96;
+                        viewbox-height: 22;
+                        commands: root.sparkline;
+                        stroke: Theme.accent;
+                        stroke-width: 1px;
+                        fill: transparent;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Tile { width: 80px; caption: "QUEUE"; value: root.queued; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Tile { width: 120px; caption: "DONE"; value: root.done; extra: root.failed; }
+            }
+        }
+
+        // Actions.
+        if root.update-version != "": VerticalLayout {
+            alignment: center;
+            Button { inert: root.inert;
+                text: root.updating ? "Updating…" : "Update to " + root.update-version;
+                icon: Icons.update;
+                kind: ButtonKind.primary;
+                tooltip: "Install update and restart";
+                enabled: !root.updating;
+                clicked => { root.install-update(); }
+            }
+        }
+        if root.edits.length > 0: VerticalLayout {
+            alignment: center;
+            edit-button := Button { inert: root.inert;
+                text: root.edits.length;
+                icon: Icons.edit;
+                kind: ButtonKind.ghost;
+                active: true;
+                label: "Files open for editing";
+                tooltip: "Files open for editing";
+                clicked => { edits-popup.show(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            marks := IconButton { inert: root.inert;
+                icon: Icons.bookmark;
+                label: "Bookmarks";
+                tooltip: "Bookmarks";
+                enabled: root.connected;
+                clicked => { marks-popup.show(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton { inert: root.inert; icon: Icons.sync; label: "Synchronized browsing"; tooltip: "Synchronized browsing"; active: root.sync; clicked => { root.toggle-sync(); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton { inert: root.inert; icon: Icons.terminal; label: "Protocol log"; tooltip: "Protocol log"; active: root.log; clicked => { root.toggle-log(); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton { inert: root.inert; icon: Icons.settings; label: "Sites"; tooltip: "Sites"; clicked => { root.manage-sites(); } }
+        }
+        VerticalLayout {
+            alignment: center;
+            menu-button := IconButton { inert: root.inert; icon: Icons.menu; label: "Menu"; tooltip: "Menu"; clicked => { main-menu.show(); } }
+        }
+    }
+
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+    if root.progress > -1.5: ProgressBar {
+        y: parent.height - 3px;
+        width: parent.width;
+        value: root.progress;
+    }
+
+    // Each switch names what a click does, as the bar, theme and log rows do.
+    main-menu := Menu {
+        x: root.width - self.width - 10px;
+        y: root.height;
+        menu-width: 260px;
+        entries: [
+            { label: root.thick ? "Compact bar" : "Status bar", icon: root.thick ? Icons.bar-thin : Icons.bar-thick },
+            { label: Theme.dark ? "Light theme" : "Dark theme", icon: Icons.theme },
+            { label: root.log ? "Hide protocol log" : "Protocol log", icon: Icons.terminal },
+            { separator: true },
+            { label: "Check for updates", icon: Icons.update },
+            { label: root.update-at-start ? "Don't check for updates at start" : "Check for updates at start", icon: Icons.update },
+            { label: "About VibeFTP", icon: Icons.info },
+        ];
+        activated(i) => {
+            if (i == 0) { root.toggle-bar(); }
+            if (i == 1) { root.toggle-theme(); }
+            if (i == 2) { root.toggle-log(); }
+            if (i == 4) { root.check-updates(); }
+            if (i == 5) { root.toggle-update-at-start(); }
+            if (i == 6) { root.about(); }
+        }
+    }
+
+    marks-popup := PopupWindow {
+        x: root.width - 300px - 120px;
+        y: root.height;
+        width: 300px;
+        Chamfer {
+            width: 100%;
+            height: mcol.preferred-height;
+            fill: Theme.surface;
+            stroke: Theme.line-strong;
+            accessible-role: list;
+            mcol := VerticalLayout {
+                padding: 4px;
+                for b[i] in root.bookmarks: PopupRow {
+                    title: b.name;
+                    detail: b.remote;
+                    remove-label: "Remove " + b.name;
+                    picked => { root.go-bookmark(i); }
+                    removed => { root.remove-bookmark(i); }
+                }
+                if root.bookmarks.length == 0: Text {
+                    height: Theme.row-h;
+                    x: 10px;
+                    text: "No bookmarks for this site";
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                }
+                Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Theme.line; } }
+                PopupRow {
+                    title: "Bookmark current folders";
+                    picked => { root.add-bookmark(); }
+                }
+            }
+        }
+    }
+
+    edits-popup := PopupWindow {
+        x: root.width - 300px - 160px;
+        y: root.height;
+        width: 300px;
+        Chamfer {
+            width: 100%;
+            height: ecol.preferred-height;
+            fill: Theme.surface;
+            stroke: Theme.line-strong;
+            accessible-role: list;
+            ecol := VerticalLayout {
+                padding: 4px;
+                Text { x: 10px; height: 22px; text: "WATCHING FOR SAVES"; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                for e[i] in root.edits: PopupRow {
+                    title: e.name;
+                    detail: e.remote;
+                    remove-label: "Stop watching " + e.name;
+                    removed => { root.stop-editing(i); }
+                }
+            }
+        }
+    }
+}
