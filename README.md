@@ -57,7 +57,9 @@ shows the design system's kitchen sink.
 download `nsis-3.13.zip` from SourceForge (SHA-256
 `ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8`) and unpack it to
 `_tools\nsis-3.13` in the folder that holds this repository. The script checks that whole folder
-against a pinned hash before it runs anything from it.
+against a pinned hash before it runs anything from it. `app\installer\notices.ps1` writes
+`THIRD-PARTY-NOTICES.txt` for each build (every crate the app links, with its licence text), and
+the installer puts it and `LICENSE` next to the app.
 
 ## License
 

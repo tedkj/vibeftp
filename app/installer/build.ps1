@@ -107,6 +107,10 @@ if ($Sign) {
 if ($LASTEXITCODE -ne 0) { throw "the release exe lacks the DLL hardening: not bundled" }
 & "$PSScriptRoot\check.ps1" -Paths $exe
 if ($LASTEXITCODE -ne 0) { throw "the release exe holds a user name or build path: not bundled" }
+# VibeFTP's licence and the third-party notices go next to the exe: notices.ps1 lists the crates
+# this build linked (Cargo.lock as committed) with their licence texts.
+$notices = "$bundle\THIRD-PARTY-NOTICES.txt"
+& "$PSScriptRoot\notices.ps1" -Out $notices
 $out = "$bundle\VibeFTP_${version}_x64-setup.exe"
 
 # With -Sign, vibeftp.nsi's !uninstfinalize signs the uninstaller (and keeps a copy here) and its
@@ -122,7 +126,7 @@ try {
     Push-Location $PSScriptRoot
     try {
         AssertNsis
-        & $makensis /NOCONFIG /V2 "/DVERSION=$version" "/DVERSION4=$version4" "/DEXE=$exe" "/DOUTFILE=$out" @signDefines vibeftp.nsi
+        & $makensis /NOCONFIG /V2 "/DVERSION=$version" "/DVERSION4=$version4" "/DEXE=$exe" "/DLICENSE=$root\LICENSE" "/DNOTICES=$notices" "/DOUTFILE=$out" @signDefines vibeftp.nsi
         if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
     } finally { Pop-Location }
 

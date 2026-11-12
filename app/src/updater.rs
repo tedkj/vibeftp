@@ -143,9 +143,12 @@ impl Updater {
         Ok(Updater { policy, client })
     }
 
-    /// The newer version on offer, if any.
+    /// The newer version on offer, if any. No manifest at all (404) is no offer: GitHub's
+    /// /releases/latest skips pre-releases, so until the first full release there is none.
     pub async fn check(&self) -> Result<Option<Offer>, String> {
-        let body = self.fetch(&self.policy.manifest_url, self.policy.max_manifest, self.policy.manifest_timeout).await?;
+        let Some(body) = self.get(&self.policy.manifest_url, self.policy.max_manifest, self.policy.manifest_timeout, true).await? else {
+            return Ok(None);
+        };
         let m: serde_json::Value = serde_json::from_slice(&body).map_err(|_| "The update information is not readable".to_string())?;
         let version = m["version"].as_str().ok_or("The update information names no version")?;
         let version = version.strip_prefix('v').unwrap_or(version).to_string();
@@ -236,6 +239,12 @@ impl Updater {
     }
 
     async fn fetch(&self, url: &str, cap: u64, timeout: Duration) -> Result<Vec<u8>, String> {
+        // With `missing_ok` false a 404 is an error, so there is always a body here.
+        Ok(self.get(url, cap, timeout, false).await?.unwrap_or_default())
+    }
+
+    /// `url`'s body, capped; `None` for a 404 when `missing_ok` (only from an allowed host).
+    async fn get(&self, url: &str, cap: u64, timeout: Duration, missing_ok: bool) -> Result<Option<Vec<u8>>, String> {
         let u = Url::parse(url).map_err(|_| format!("Not a valid address: {url}"))?;
         if !self.policy.allowed(&u) {
             return Err(format!("{} is not where VibeFTP's releases live", u.host_str().unwrap_or("?")));
@@ -243,6 +252,9 @@ impl Updater {
         let mut r = self.client.get(u).timeout(timeout).send().await.map_err(|e| describe(&e))?;
         if !self.policy.allowed(r.url()) {
             return Err(format!("{} is not where VibeFTP's releases live", r.url().host_str().unwrap_or("?")));
+        }
+        if missing_ok && r.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
         }
         if !r.status().is_success() {
             return Err(format!("{} answered {}", r.url().host_str().unwrap_or("?"), r.status()));
@@ -261,7 +273,7 @@ impl Updater {
         if expected.is_some_and(|n| n != buf.len() as u64) {
             return Err("The download was cut short".into());
         }
-        Ok(buf)
+        Ok(Some(buf))
     }
 }
 

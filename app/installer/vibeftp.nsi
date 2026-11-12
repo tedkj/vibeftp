@@ -1,5 +1,7 @@
-; VibeFTP's installer: per user, no admin, one exe. Built by installer\build.ps1:
-;   makensis /DVERSION=0.1.0 /DVERSION4=0.1.0.0 /DEXE=<VibeFTP.exe> /DOUTFILE=<setup.exe> vibeftp.nsi
+; VibeFTP's installer: per user, no admin, one exe (with its licence and the third-party
+; notices beside it). Built by installer\build.ps1:
+;   makensis /DVERSION=0.2.0 /DVERSION4=0.2.0.0 /DEXE=<VibeFTP.exe> /DLICENSE=<LICENSE>
+;            /DNOTICES=<THIRD-PARTY-NOTICES.txt> /DOUTFILE=<setup.exe> vibeftp.nsi
 ;
 ; Interactive: folder, install, finish (with "Run VibeFTP").
 ; /S /RUN    the updater: silent, then VibeFTP starts again.
@@ -153,6 +155,9 @@ Section "Install"
   ${EndIf}
   Delete $R9 ; still running: it goes with the next install
 
+  ; VibeFTP's licence (AGPL-3.0) and the third-party notices, next to the exe.
+  File "/oname=LICENSE.txt" "${LICENSE}"
+  File "/oname=THIRD-PARTY-NOTICES.txt" "${NOTICES}"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   CreateShortcut "$SMPROGRAMS\${NAME}.lnk" "$INSTDIR\${NAME}.exe"
 
@@ -195,6 +200,8 @@ Section "Uninstall"
     Abort
   ${EndIf}
   Delete "$INSTDIR\${NAME}.exe.new"
+  Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\uninstall.exe"
   Delete "$SMPROGRAMS\${NAME}.lnk"
   RMDir "$INSTDIR"
