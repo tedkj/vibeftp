@@ -1,8 +1,9 @@
 # Build the release exe and its installer: target\release\bundle\VibeFTP_<version>_x64-setup.exe.
 # Never with dev hooks. The update signature and manifest come after (see installer\release.ps1).
 #   build.ps1 [-Sign | -TestSign] [-SignConfig <sign.json>]
-# -Sign signs the exe, the uninstaller and the installer (code signing is not set up yet: previews
-# ship unsigned); off by default, and without it nothing is signed or checked for a signature.
+# -Sign signs the exe, the uninstaller and the installer with the Certum certificate (sign.ps1;
+# SimplySign Desktop connected); off by default, and without it nothing is signed or checked for a
+# signature. Every signature counts against Certum's monthly cap: sign releases, not dev builds.
 # -TestSign does the same with a config's throwaway test certificate (testPfx), for tests only;
 # -Sign refuses such a config, so a release can't be test-signed by accident.
 param(

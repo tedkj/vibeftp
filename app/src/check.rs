@@ -20,9 +20,9 @@ pub const HOST: &str = "getvibeware.com";
 /// The release list's signing key: the updater's (VibeFTP `app/src/updater.rs`). Ted holds the
 /// secret half.
 pub const RELEASE_KEY: &str = "RWRtiPHhr0TNUFN/XkthdjPMyH1O9YUG07Ge9MyAFamDUBzJ2agHr7EA";
-/// Who signs the exe once code signing is set up (VibeTemplate's docs/CODE-SIGNING.md). Empty
+/// Who signs the exe: the Certum certificate's name, as Windows shows it (VibeTemplate's docs/CODE-SIGNING.md).
 /// until then: any valid signature counts. Once set, a valid signature by anyone else is a danger.
-pub const PUBLISHER: &str = "";
+pub const PUBLISHER: &str = "Open Source Developer Ted Kenneth Johansen";
 /// The exe's name in the release list (the installer's name for it, whatever the copy is called).
 pub const EXE: &str = "VibeFTP.exe";
 /// The uninstaller beside an installed exe.
