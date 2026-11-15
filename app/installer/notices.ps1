@@ -6,7 +6,9 @@
 # dependencies) for x86_64-pc-windows-msvc, VibeFTP's own crates left out (LICENSE covers them).
 # The texts: each crate's top-level LICENSE*, LICENCE*, COPYING*, NOTICE*, COPYRIGHT* and
 # UNLICENSE* files, and the file `license-file` names; identical texts are printed once, with
-# every crate that carries them. A crate with none gets its REUSE LICENSES\<id> file, or else the
+# every crate that carries them. A file such a text points at by path (aws-lc-sys: "See
+# third_party/fiat/LICENSE.") comes too, from wherever it sits in the crate; for one the crate
+# doesn't carry, $pointedAt names what stands in or why none is needed. A crate with none gets its REUSE LICENSES\<id> file, or else the
 # standard SPDX text of its licence (licenses\ beside this script) with its authors as the
 # copyright line.
 param([Parameter(Mandatory)][string]$Out, [switch]$Report)
@@ -35,6 +37,17 @@ $namePattern = '^(LICEN[CS]E|COPYING|NOTICE|COPYRIGHT|UNLICENSE)([-_.].*)?$'
 $groups = [ordered]@{}   # text -> list of "name version (licence)"
 $missing = @()
 $needed = @()
+# Files a crate's licence points at but the crate doesn't carry, "<crate> <path>" -> what stands in:
+# "header:<file in the crate>" puts that file's opening comment (its copyright and licence) in the
+# notices; anything else is the reason none is needed (-Report lists it).
+$pointedAt = @{
+    "aws-lc-sys third_party/jitterentropy/jitterentropy-library/LICENSE" = "header:aws-lc/third_party/jitterentropy/jitterentropy-library/src/jitterentropy-base.c"
+    "aws-lc-sys third_party/s2n-bignum/s2n-bignum-imported/LICENSE" = "Apache-2.0 OR ISC OR MIT-0: all three texts are in the crate's LICENSE"
+    "aws-lc-sys third_party/googletest/LICENSE" = "not linked: tests only (the crate's LICENSE says so)"
+    "aws-lc-sys third_party/wycheproof_testvectors/LICENSE" = "not linked: test vectors only (the crate's LICENSE says so)"
+    "rustls-webpki third-party/chromium/LICENSE" = "not linked: upstream's test data, not in the crate"
+}
+$unresolved = @()
 foreach ($p in $shipped) {
     $dir = Split-Path -Parent $p.manifest_path
     $files = @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Name -match $namePattern })
@@ -47,6 +60,32 @@ foreach ($p in $shipped) {
     $texts = @()
     foreach ($f in ($files | Sort-Object Name)) {
         $texts += ([IO.File]::ReadAllText($f.FullName) -replace "`r`n", "`n").Trim()
+    }
+    # A licence text that points at another file by path ("See third_party/fiat/LICENSE."): that
+    # file too, found anywhere in the crate by the end of its path (X15DEP-6). One the crate doesn't
+    # carry needs a line in $pointedAt, or the build stops.
+    $refs = @($texts | ForEach-Object { [regex]::Matches($_, '(?<![\w./:-])((?:[\w.-]+/)+(?:LICEN[CS]E|COPYING)[\w-]*(?:\.(?:txt|md))?)') } | ForEach-Object { $_.Groups[1].Value -replace '^(\./)+', '' } | Sort-Object -Unique)
+    if ($refs.Count) {
+        $skipLen = (Get-Item -LiteralPath $dir).FullName.TrimEnd('\').Length + 1
+        $all = @(Get-ChildItem -LiteralPath $dir -Recurse -File | ForEach-Object { [pscustomobject]@{ Rel = $_.FullName.Substring($skipLen).Replace('\', '/'); Full = $_.FullName } })
+        foreach ($ref in $refs) {
+            $found = @($all | Where-Object { $_.Rel -ieq $ref -or $_.Rel.EndsWith("/$ref", [StringComparison]::OrdinalIgnoreCase) })
+            if ($found.Count) {
+                foreach ($f in $found) { $texts += ([IO.File]::ReadAllText($f.Full) -replace "`r`n", "`n").Trim() }
+                continue
+            }
+            $why = $pointedAt["$($p.name) $ref"]
+            if (-not $why) { $unresolved += "$($p.name) $($p.version): its licence points at $ref, which it doesn't carry"; continue }
+            if ($why -like "header:*") {
+                $src = Join-Path $dir $why.Substring(7)
+                if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { $unresolved += "$($p.name) $($p.version): no $($why.Substring(7)) (for $ref)"; continue }
+                $body = [IO.File]::ReadAllText($src) -replace "`r`n", "`n"
+                $m = [regex]::Match($body, '^\s*/\*(.*?)\*/', 'Singleline')
+                if (-not $m.Success) { $unresolved += "$($p.name) $($p.version): $($why.Substring(7)) opens with no comment (for $ref)"; continue }
+                $header = (($m.Groups[1].Value -split "`n" | ForEach-Object { $_ -replace '^\s?\*\s?', '' }) -join "`n").Trim()
+                $texts += "$ref is not in the crate; this is the copyright and licence header of $($why.Substring(7)):`n`n$header"
+            } elseif ($Report) { "  {0} {1}: {2}: {3}" -f $p.name, $p.version, $ref, $why }
+        }
     }
     # The licence VibeFTP takes it under: of "A OR B", MIT when offered, else the first; every
     # part of an AND. (Slint: GPL-3.0-only.)
@@ -80,6 +119,7 @@ foreach ($p in $shipped) {
 }
 
 if ($needed.Count) { throw "standard licence texts missing:`n  " + (($needed | Sort-Object -Unique) -join "`n  ") }
+if ($unresolved.Count) { throw "licence files pointed at but not found (add the file's stand-in to `$pointedAt):`n  " + ($unresolved -join "`n  ") }
 if ($Report) {
     "shipped crates: $($shipped.Count); distinct texts: $($groups.Count); with no text of their own: $($missing.Count)"
     $missing | ForEach-Object { "  {0} {1}: {2}" -f $_.name, $_.version, $_.license }
