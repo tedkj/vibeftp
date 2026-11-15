@@ -2027,7 +2027,10 @@ async fn edit_open_run(
     let ctx = make_ctx(state, session, id, "download", Policy::Overwrite);
     let r = edit_download(sess, path, &part, &ctx).await;
     state.transfers.lock().unwrap().remove(id);
-    let r = r.and_then(|server| crate::protocol::swap_in(&part, local, name).map(|()| server));
+    let r = match r {
+        Ok(server) => crate::protocol::swap_in(&part, local, name).await.map(|()| server),
+        Err(e) => Err(e),
+    };
     let server = match r {
         Ok(server) => server,
         Err(e) => {

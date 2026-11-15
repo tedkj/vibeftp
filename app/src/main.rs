@@ -199,6 +199,12 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     let ran = ui.run();
     prefs.flush(); // a change from the last moments, still on its way to disk
+    // So are the folders of the last moments (the 600 ms debounce dies with the event loop,
+    // X15CON-16): written now, bounded, on the engine's runtime.
+    if let Some((id, remote, local)) = app.take_pending_touch() {
+        let core = core.clone();
+        let _ = rt.block_on(async move { tokio::time::timeout(Duration::from_secs(2), vibeftp_core::ops::site_touch(&core, id, remote, local)).await });
+    }
     // Transfers are cut short; edit copies whose bytes are on the server go, unsent ones stay.
     // Nothing is told here, the window is gone (a known limit, HARDENING RVA4-1); unsent edits
     // were named by the quit question (RVA5-2, RVA6-1).

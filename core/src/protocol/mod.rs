@@ -619,13 +619,39 @@ fn remove_unheld(path: &Path) {
 }
 
 /// A whole download in its part file takes the real name (the edit copy's and an overwrite's
-/// swap). On an error the part is still there for the caller to remove.
-pub(crate) fn swap_in(part: &Path, local: &Path, name: &str) -> Result<()> {
-    std::fs::rename(part, local).map_err(|e| match read_only(local) {
-        true => AppError::Msg(format!("{name}: the file on this computer is read-only, so the fresh copy could not replace it (clear Read-only in its Properties)")),
-        false => AppError::Msg(format!("{name}: the fresh copy could not replace the one on disk ({e}); is another program locking it?")),
+/// swap). On an error the part is still there for the caller to remove. On the blocking pool,
+/// not one of the engine's two workers (X15CON-7).
+pub(crate) async fn swap_in(part: &Path, local: &Path, name: &str) -> Result<()> {
+    let (part, local, name) = (part.to_path_buf(), local.to_path_buf(), name.to_string());
+    tokio::task::spawn_blocking(move || {
+        std::fs::rename(&part, &local).map_err(|e| match read_only(&local) {
+            true => AppError::Msg(format!("{name}: the file on this computer is read-only, so the fresh copy could not replace it (clear Read-only in its Properties)")),
+            false => AppError::Msg(format!("{name}: the fresh copy could not replace the one on disk ({e}); is another program locking it?")),
+        })
     })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
 }
+
+/// Drop a part file (its Drop removes the file) on the blocking pool (X15CON-7). A part dropped
+/// with a cancelled task still goes in its Drop, where it is.
+async fn drop_off(part: PartFile) {
+    let _ = tokio::task::spawn_blocking(move || {
+        drop(part)
+    })
+    .await;
+}
+
+/// `PartFile::new` on the blocking pool (X15CON-7).
+async fn new_part(path: PathBuf, name: &str) -> Result<PartFile> {
+    let name = name.to_string();
+    tokio::task::spawn_blocking(move || {
+        PartFile::new(path, &name)
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
+}
+
 
 /// Whether `local` has the read-only attribute.
 fn read_only(local: &Path) -> bool {
@@ -686,6 +712,16 @@ pub fn mark_downloaded(local: &Path, host_url: &str) {
 }
 #[cfg(not(windows))]
 pub fn mark_downloaded(_local: &Path, _host_url: &str) {}
+
+/// `mark_downloaded` from async code: on the blocking pool, never one of the engine's two
+/// workers, which a stalled disk or share would hold for its timeout (X15CON-7).
+pub async fn mark_downloaded_off(local: &Path, host_url: &str) {
+    let (local, host_url) = (local.to_path_buf(), host_url.to_string());
+    let _ = tokio::task::spawn_blocking(move || {
+        mark_downloaded(&local, &host_url)
+    })
+    .await;
+}
 
 /// The Mark of the Web's text: Internet zone, and where the file came from when known.
 pub fn zone_identifier(host_url: &str) -> String {
@@ -1085,7 +1121,7 @@ impl Remote {
         // This transfer's own kept part, or a new one (RVA3-5).
         let mut part = match ctx.take_part(&path) {
             Some(p) => p,
-            None => PartFile::new(path, &name)?,
+            None => new_part(path, &name).await?,
         };
         let r = match from {
             Some(offset) => self.download_file(remote, &part.path, offset, expected, false, seen, ctx).await,
@@ -1096,10 +1132,14 @@ impl Remote {
             Err(e) => Err(e),
         };
         // The hold goes right before the rename it would block (RVA2-3).
-        match r.and_then(|()| {
-            part.release();
-            swap_in(&part.path, local, &name)
-        }) {
+        let r = match r {
+            Ok(()) => {
+                part.release();
+                swap_in(&part.path, local, &name).await
+            }
+            Err(e) => Err(e),
+        };
+        match r {
             Ok(()) => {
                 part.landed();
                 Ok(())
@@ -1110,10 +1150,15 @@ impl Remote {
                 if ctx.sent_to(&part.path.to_string_lossy()).is_some() {
                     part.source = *ctx.source.lock().unwrap();
                     *ctx.part.lock().unwrap() = Some(part);
+                } else {
+                    drop_off(part).await;
                 }
                 Err(e)
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                drop_off(part).await;
+                Err(e)
+            }
         }
     }
 
@@ -1440,7 +1485,7 @@ impl Remote {
                                 None if over => whole = true,
                                 None => {
                                     if resuming {
-                                        mark_downloaded(local, &ctx.host_url); // every byte landed before the link died
+                                        mark_downloaded_off(local, &ctx.host_url).await; // every byte landed before the link died
                                     }
                                     *ctx.inflight.lock().unwrap() = None;
                                     (ctx.report)(remote, src.0, Some(src.0));

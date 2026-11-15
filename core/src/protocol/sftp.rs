@@ -788,7 +788,7 @@ impl SftpConn {
             tokio::fs::File::create(local).await?
         };
         // Marked before any byte lands: a retry that finds the file complete never writes again.
-        super::mark_downloaded(local, &ctx.host_url);
+        super::mark_downloaded_off(local, &ctx.host_url).await;
         ctx.begin(local.to_string_lossy().to_string(), offset);
         *ctx.source.lock().unwrap() = Some((reported.unwrap_or(0), modified));
         (ctx.report)(remote, offset, total);

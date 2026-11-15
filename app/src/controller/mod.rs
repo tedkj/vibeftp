@@ -138,6 +138,8 @@ pub(crate) struct State {
     note: String,
     parallel: usize,
     touch_timer: Option<Timer>,
+    /// The folders `touch_timer` will write (site id, remote, local), until it does.
+    touch_pending: Option<(String, String, String)>,
     local_path_pref: String,
     /// Boot's remembered folder lost to a navigation still loading: should that one fail too
     /// and leave the local pane with no folder, it goes home in boot's place.
@@ -1546,18 +1548,29 @@ impl App {
             }
             (id, r, l)
         };
+        // Pending until the debounce runs out, or until a quick quit takes it (X15CON-16).
+        self.st.borrow_mut().touch_pending = Some((id, r, l));
         let me = Rc::downgrade(self);
         let timer = Timer::default();
         timer.start(TimerMode::SingleShot, Duration::from_millis(600), move || {
             if let Some(a) = me.upgrade() {
+                let Some((id, r, l)) = a.st.borrow_mut().touch_pending.take() else { return };
                 let b = a.backend.clone();
-                let (id, r, l) = (id.clone(), r.clone(), l.clone());
                 a.go(|_| async move {
                     let _ = b.site_touch(id, r, l).await;
                 });
             }
         });
         self.st.borrow_mut().touch_timer = Some(timer);
+    }
+
+    /// The folders a debounced save has not written yet (site id, remote, local), taken so the
+    /// timer writes nothing more: `main` writes them once the window is gone, so a quick quit
+    /// doesn't open the previous folder next time (X15CON-16).
+    pub fn take_pending_touch(&self) -> Option<(String, String, String)> {
+        let mut st = self.st.borrow_mut();
+        st.touch_timer = None;
+        st.touch_pending.take()
     }
 
     pub fn up(self: &Rc<Self>, side: Side) {
