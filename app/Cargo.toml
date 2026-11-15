@@ -1,6 +1,6 @@
 [package]
 name = "vibeftp-app"
-version = "0.2.0-preview"
+version = "0.2.1-preview"
 description = "VibeFTP: an FTP, FTPS and SFTP client for Windows on a native Slint UI (software renderer)."
 authors = ["Ted K. Johansen"]
 license = "AGPL-3.0-only"

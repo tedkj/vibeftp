@@ -34,7 +34,7 @@ before it runs. Compare the installer's SHA-256 with the one in `SHA256SUMS.txt`
 page:
 
 ```powershell
-Get-FileHash .\VibeFTP_0.2.0-preview_x64-setup.exe
+Get-FileHash .\VibeFTP_0.2.1-preview_x64-setup.exe
 ```
 
 The app looks for full releases only, so a preview doesn't update itself to the next preview: get

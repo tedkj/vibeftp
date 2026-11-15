@@ -1,6 +1,6 @@
 [package]
 name = "vibeftp-release"
-version = "0.2.0-preview"
+version = "0.2.1-preview"
 description = "Release tooling: the release key (keygen), minisign signatures (with the version and file name in the signed trusted comment) and the update manifest. Never shipped."
 authors = ["Ted K. Johansen"]
 license = "AGPL-3.0-only"
