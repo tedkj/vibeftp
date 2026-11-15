@@ -36,9 +36,13 @@ export global Theme {
     // dots, bars, fills and icons keep ok and warn (X15A11Y-4, Ted 2026-11-15).
     out property <color> ok-text: dark ? #4fc283 : #176a3a;
     out property <color> warn-text: dark ? #e2a24a : #865008;
-    // A colour picked elsewhere (a state's colour) as text: ok and warn become their text tokens.
+    // Danger as text: same hue, lighter (dark) or darker (light) to reach 4.5:1 on a selected
+    // row too; buttons and fills keep danger with danger-ink (Ted 2026-11-15).
+    out property <color> danger-text: dark ? #e77f79 : #a7322d;
+    // A colour picked elsewhere (a state's colour) as text: ok, warn and danger become their
+    // text tokens.
     public pure function as-text(c: color) -> color {
-        return c == ok ? ok-text : c == warn ? warn-text : c;
+        return c == ok ? ok-text : c == warn ? warn-text : c == danger ? danger-text : c;
     }
 
     // Scrim behind dialogs.

@@ -482,7 +482,7 @@ export component AppWindow inherits Window {
                         }
                         // Not a live region (X15RFTP-1): it shows the protocol log's last line, so a
                         // screen reader would read every FTP command out. The toasts carry the results.
-                        Text { text: root.status-left; horizontal-stretch: 1; overflow: elide; font-family: Type.mono; font-size: Type.small; color: root.status-warn ? Theme.danger : Theme.ink-3; vertical-alignment: center; }
+                        Text { text: root.status-left; horizontal-stretch: 1; overflow: elide; font-family: Type.mono; font-size: Type.small; color: root.status-warn ? Theme.danger-text : Theme.ink-3; vertical-alignment: center; }
                     }
                     TouchArea { clicked => { root.toggle-log(); } }
                 }

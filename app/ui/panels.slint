@@ -38,7 +38,7 @@ component QueueLine inherits Rectangle {
             if root.item.error != "": error-text := Rectangle {
                 min-width: et.min-width;
                 preferred-width: et.preferred-width;
-                et := Text { width: 100%; height: 100%; text: root.item.error; accessible-role: none; font-size: Type.small; color: Theme.danger; overflow: elide; vertical-alignment: center; }
+                et := Text { width: 100%; height: 100%; text: root.item.error; accessible-role: none; font-size: Type.small; color: Theme.danger-text; overflow: elide; vertical-alignment: center; }
                 TipArea { tooltip: root.item.error; }
             }
             if root.item.left-out != "": left-out := Rectangle {
@@ -48,7 +48,7 @@ component QueueLine inherits Rectangle {
                     text: root.item.left-out;
                     accessible-role: none;
                     font-size: Type.small;
-                    color: Theme.danger;
+                    color: Theme.danger-text;
                     vertical-alignment: center;
                 }
                 TipArea { tooltip: root.item.left-out-detail; }
@@ -259,7 +259,7 @@ export component LogPanel inherits Rectangle {
                         overflow: elide;
                         font-family: Type.mono;
                         font-size: Type.small;
-                        color: l.kind == 1 ? Theme.danger : l.kind == 2 ? Theme.accent : l.kind == 3 ? Theme.ink-2 : Theme.ink;
+                        color: l.kind == 1 ? Theme.danger-text : l.kind == 2 ? Theme.accent : l.kind == 3 ? Theme.ink-2 : Theme.ink;
                         vertical-alignment: center;
                     }
                 }

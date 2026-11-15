@@ -23,7 +23,7 @@ component Tile inherits Chamfer {
         HorizontalLayout {
             spacing: 6px;
             Text { text: root.value; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; vertical-alignment: center; }
-            if root.extra != "": Text { text: root.extra; font-size: Type.small; color: Theme.danger; vertical-alignment: center; }
+            if root.extra != "": Text { text: root.extra; font-size: Type.small; color: Theme.danger-text; vertical-alignment: center; }
         }
     }
 }
