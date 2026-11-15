@@ -60,7 +60,29 @@ function AssertNsis {
 }
 AssertNsis
 
-$version = (Select-String -Path "$root\app\Cargo.toml" -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+# NASM assembles aws-lc's crypto code (AES-GCM, ChaCha20-Poly1305, SHA, bignum) that goes into the
+# exe (X15DEP-3). It is the official NASM 3.02 (nasm.exe and LICENSE from nasm.us's Windows x64
+# build), copied to _tools\nasm-3.02 in the folder that holds this repository, and that folder must
+# hash as pinned, like NSIS's. aws-lc-sys runs plain `nasm` with no path, and Rust finds it in the
+# build script's own folder, then System32, then the Windows folder, then PATH. So System32 and the
+# Windows folder must hold none, the pinned folder goes first on PATH, and nasm must resolve to it,
+# whatever else PATH holds. AWS_LC_SYS_CMAKE_BUILDER=0 keeps aws-lc-sys on its cc builder (the one
+# that runs `nasm` that way); AWS_LC_SYS_PREBUILT_NASM=0 keeps it from using the crate's own objects.
+$NasmDir = Join-Path (Split-Path $root -Parent) "_tools\nasm-3.02"
+$NasmTreeSha256 = "46243B29348009C6F3D2869CE2CE5C2367CF7980A48CA930E1D30E9C6B50A337"
+if (-not (Test-Path -LiteralPath "$NasmDir\nasm.exe" -PathType Leaf)) { throw "no $NasmDir\nasm.exe (the official NASM 3.02: README, Building the installer)" }
+foreach ($d in @([Environment]::SystemDirectory, $env:SystemRoot)) {
+    if (Test-Path -LiteralPath (Join-Path $d "nasm.exe")) { throw "$d holds a nasm.exe, which the build would run before the pinned one. Remove it." }
+}
+$h = TreeHash $NasmDir
+if ($h -ne $NasmTreeSha256) { throw "$NasmDir's tree hash is $h, not the pinned ${NasmTreeSha256}: not the official NASM 3.02 (a file changed, missing or added), not run" }
+$env:Path = "$NasmDir;$env:Path"
+$env:AWS_LC_SYS_CMAKE_BUILDER = "0"
+$env:AWS_LC_SYS_PREBUILT_NASM = "0"
+$nasm = @(Get-Command nasm.exe -CommandType Application -ErrorAction SilentlyContinue)
+if ($nasm.Count -eq 0 -or $nasm[0].Source -ne (Join-Path $NasmDir "nasm.exe")) { throw "nasm resolves to $(if ($nasm.Count) { $nasm[0].Source } else { 'nothing' }), not $NasmDir\nasm.exe" }
+
+$version =(Select-String -Path "$root\app\Cargo.toml" -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $parts = ($version -split '[.+-]')[0..2] | ForEach-Object { [int]$_ }
 $version4 = "{0}.{1}.{2}.0" -f $parts[0], $parts[1], $parts[2]
 

@@ -41,7 +41,8 @@ that one from Releases.
 
 ## Building from source
 
-You need a current Rust toolchain on Windows (the MSVC target).
+You need a current Rust toolchain on Windows (the MSVC target) and NASM, which assembles the
+crypto code (aws-lc).
 
 ```sh
 cargo build --release -p vibeftp-app --bin vibeftp-native
@@ -57,9 +58,11 @@ shows the design system's kitchen sink.
 download `nsis-3.13.zip` from SourceForge (SHA-256
 `ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8`) and unpack it to
 `_tools\nsis-3.13` in the folder that holds this repository. The script checks that whole folder
-against a pinned hash before it runs anything from it. `app\installer\notices.ps1` writes
-`THIRD-PARTY-NOTICES.txt` for each build (every crate the app links, with its licence text), and
-the installer puts it and `LICENSE` next to the app.
+against a pinned hash before it runs anything from it. It also needs the official NASM 3.02:
+`nasm.exe` and `LICENSE` from nasm.us's Windows x64 build, in `_tools\nasm-3.02` beside NSIS's
+folder. That folder is pinned the same way, and the script puts it first on PATH for the build.
+`app\installer\notices.ps1` writes `THIRD-PARTY-NOTICES.txt` for each build (every crate the app
+links, with its licence text), and the installer puts it and `LICENSE` next to the app.
 
 ## License
 
