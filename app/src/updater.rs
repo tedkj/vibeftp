@@ -9,6 +9,8 @@
 //! but only once Windows says it is validly signed (Authenticode) by the publisher, by the install
 //! check's rule (X15SIG-2). Only VibeFTP's own installer names are taken (X15SIG-5).
 //! HTTPS only, to GitHub's release hosts only (redirects included), with size caps and timeouts.
+//! Windows' own Authenticode check may fetch the certificate chain for the signature (Windows
+//! Update's root list, Certum's intermediate, over HTTP); README and About say so (X15R2A-4).
 //! Any failure before the installer starts leaves the running app as it was. A copy outside the
 //! user's own folders, which the installer would refuse after the app quit, is refused before
 //! anything is downloaded (X15RFTP-3).

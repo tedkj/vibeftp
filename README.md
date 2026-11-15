@@ -23,7 +23,8 @@ when idle.
 Only the servers you connect to, GitHub to look for updates (a few seconds after each start,
 which you can turn off in the menu, or when you ask) and getvibeware.com when you press About's
 "Check this install". Updates are signed with the VibeWare release key, and the app checks the
-signature before anything is installed.
+signature before anything is installed. To check the installer's code signature during an update,
+Windows itself may fetch certificates from Windows Update and Certum (who issued the certificate).
 
 ## Download
 
