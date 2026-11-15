@@ -83,11 +83,42 @@ impl Rows {
     }
 }
 
+/// Who signed a file: the verified chain's leaf certificate (`trust::signature`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signer {
+    /// The display name, cleaned for showing (invisible marks dropped, whitespace collapsed).
+    pub name: String,
+    /// The display name exactly as the certificate gives it: what PUBLISHER is compared with.
+    pub raw: String,
+    /// The leaf's issuer's display name, exactly as given ("" when it couldn't be read).
+    pub issuer: String,
+}
+
+impl From<&str> for Signer {
+    /// A signer named `name`, read as is, with no issuer known.
+    fn from(name: &str) -> Signer {
+        Signer { name: name.into(), raw: name.into(), issuer: String::new() }
+    }
+}
+
+/// The issuer of Ted's code signing certificate (the shipped files' leaf, X15SIG-3). A renewal
+/// keeps it; a change of CA changes this line with PUBLISHER.
+pub const PUBLISHER_ISSUER: &str = "Certum Code Signing 2021 CA";
+
+/// The one publisher rule, for the install check's Signature row and the updater alike
+/// (X15SIG-3): with a publisher set, the signer's display name must be exactly `publisher`, as
+/// the certificate gives it (no cleaning before the compare: an NBSP, a double space or a
+/// zero-width mark is another name), and its issuer exactly PUBLISHER_ISSUER, so a certificate
+/// for the same name from another CA doesn't count. With none set, any valid signature counts.
+pub fn by_publisher(publisher: &str, s: &Signer) -> bool {
+    publisher.is_empty() || (s.raw == publisher && s.issuer == PUBLISHER_ISSUER)
+}
+
 /// What Windows said of one file's signature (`trust::signature`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sig {
-    /// Valid, by this signer (the certificate's display name, cleaned).
-    Signed(String),
+    /// Valid, by this signer.
+    Signed(Signer),
     NotSigned,
     /// Signed, but the signature does not hold (why, in words).
     Broken(String),
@@ -411,10 +442,16 @@ pub fn signature_row(publisher: &str, files: &[File]) -> Row {
     if let Some((f, why)) = files.iter().find_map(|f| if let Sig::Broken(w) = &f.sig { Some((f, w)) } else { None }) {
         return row(Dot::Danger, format!("{}'s signature is broken: {why}.", called_first(&f.name)));
     }
-    if !publisher.is_empty()
-        && let Some(name) = files.iter().find_map(|f| if let Sig::Signed(n) = &f.sig { (n != publisher).then_some(n) } else { None })
-    {
-        return row(Dot::Danger, format!("Signed by {name}, not by {publisher}, so this isn't the published app."));
+    if let Some(s) = files.iter().find_map(|f| if let Sig::Signed(s) = &f.sig { (!by_publisher(publisher, s)).then_some(s) } else { None }) {
+        let why = if s.raw == publisher {
+            let from = if s.issuer.is_empty() { "an unknown authority".to_string() } else { crate::text::clean_max(&s.issuer, 120) };
+            format!("Signed in the name of {publisher}, but with a certificate from {from}, not {PUBLISHER_ISSUER}")
+        } else if s.name == publisher {
+            format!("Signed in a name that only looks like {publisher}")
+        } else {
+            format!("Signed by {}, not by {publisher}", s.name)
+        };
+        return row(Dot::Danger, format!("{why}, so this isn't the published app."));
     }
     if let Some((f, why)) = files.iter().find_map(|f| if let Sig::Unknown(w) = &f.sig { Some((f, w)) } else { None }) {
         return row(Dot::Warn, format!("Windows couldn't check {}'s signature: {why}.", called(&f.name)));
@@ -422,7 +459,7 @@ pub fn signature_row(publisher: &str, files: &[File]) -> Row {
     if let Some(f) = files.iter().find(|f| f.sig == Sig::Missing) {
         return row(Dot::Warn, format!("{} is missing, so its signature wasn't checked.", called_first(&f.name)));
     }
-    let signers: Vec<&String> = files.iter().filter_map(|f| if let Sig::Signed(n) = &f.sig { Some(n) } else { None }).collect();
+    let signers: Vec<&Signer> = files.iter().filter_map(|f| if let Sig::Signed(s) = &f.sig { Some(s) } else { None }).collect();
     let unsigned: Vec<String> = files.iter().filter(|f| f.sig == Sig::NotSigned).map(|f| called(&f.name)).collect();
     if signers.is_empty() {
         return row(Dot::Warn, "Not signed yet, so Windows can't vouch for this copy.");
@@ -430,13 +467,13 @@ pub fn signature_row(publisher: &str, files: &[File]) -> Row {
     if !unsigned.is_empty() {
         return row(Dot::Warn, format!("Only part of this install is signed: {} isn't.", and(&unsigned)));
     }
-    if signers.iter().any(|n| *n != signers[0]) {
-        let mut names: Vec<String> = signers.iter().map(|n| n.to_string()).collect();
+    if signers.iter().any(|s| s.raw != signers[0].raw || s.issuer != signers[0].issuer) {
+        let mut names: Vec<String> = signers.iter().map(|s| s.name.clone()).collect();
         names.dedup();
         return row(Dot::Warn, format!("Signed by {}: its files have different publishers.", and(&names)));
     }
     // No "just now": a kept answer is shown again when About reopens (review RAB-7).
-    row(Dot::Ok, format!("Signed by {}. Windows checked the signature.", signers[0]))
+    row(Dot::Ok, format!("Signed by {}. Windows checked the signature.", signers[0].name))
 }
 
 /// The Files row: each file's SHA-256 against the running version's entry in the list.

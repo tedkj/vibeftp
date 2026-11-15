@@ -19,7 +19,7 @@
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use vibeftp_release::{KDF, KEY_FILE, PUB_FILE, SecretKey, check_release, keygen, publish, verify};
+use vibeftp_release::{KDF, KEY_FILE, PUB_FILE, SecretKey, check_release, keygen, publish, release_tag, verify};
 
 const PASSWORD_VAR: &str = "VIBEWARE_SIGN_PASSWORD";
 
@@ -92,6 +92,12 @@ fn run() -> Result<(), String> {
             println!("{}\n{}", sig.display(), manifest.display());
             Ok(())
         }
+        // The version's release tag (`release_tag`), for release.ps1: one rule everywhere.
+        Some("tag") => {
+            let version = args.get(1).ok_or("tag <version>")?;
+            println!("{}", release_tag(version));
+            Ok(())
+        }
         Some("verify") => {
             let file = PathBuf::from(args.get(1).ok_or("verify <installer>")?);
             let pubkey = arg(&args, "--pubkey").ok_or("--pubkey is required (the key the app compiles in)")?;
@@ -99,7 +105,7 @@ fn run() -> Result<(), String> {
             println!("verified: {} with {pubkey}", file.display());
             Ok(())
         }
-        _ => Err("usage: vibeftp-release keygen [--out <folder>] | sign <installer> --version <v> --url <url> | verify <installer> --pubkey <key> | pubkey".into()),
+        _ => Err("usage: vibeftp-release keygen [--out <folder>] | sign <installer> --version <v> --url <url> | tag <version> | verify <installer> --pubkey <key> | pubkey".into()),
     }
 }
 

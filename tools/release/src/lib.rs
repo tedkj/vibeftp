@@ -218,9 +218,33 @@ fn url_ok(url: &str) -> bool {
     !authority.contains('@') && port.is_none_or(|p| p == "443") && RELEASE_HOSTS.iter().any(|h| h.eq_ignore_ascii_case(host))
 }
 
+/// The GitHub release tag of `version`, the one rule for every release (release.ps1 asks this
+/// tool for it; `check_release` holds the URL to it): `v`, the major and minor numbers, the
+/// patch only when it isn't 0, then any pre-release part; build metadata is left out. So
+/// 0.2.0-preview is `v0.2-preview` (the published preview's tag), 0.3.0 `v0.3`, 0.3.1 `v0.3.1`.
+/// A version the updater can't read is given back with a `v` in front (`check_release` refuses
+/// it anyway).
+pub fn release_tag(version: &str) -> String {
+    let v = version.split('+').next().unwrap_or("");
+    let (core, pre) = v.split_once('-').map_or((v, None), |(c, p)| (c, Some(p)));
+    let parts: Vec<&str> = core.split('.').collect();
+    if !version_ok(version) || parts.len() != 3 {
+        return format!("v{version}");
+    }
+    let mut tag = format!("v{}.{}", parts[0], parts[1]);
+    if parts[2].parse::<u64>().is_ok_and(|p| p != 0) {
+        tag = format!("{tag}.{}", parts[2]);
+    }
+    match pre {
+        Some(p) => format!("{tag}-{p}"),
+        None => tag,
+    }
+}
+
 /// What the updater will accept, checked before anything is signed: a version it can read (as
 /// written, no leading `v`: the updater strips one from the manifest but not from the signed
-/// comment), an installer name it would save, and a URL it would fetch that ends in that name.
+/// comment), an installer name it would save (`VibeFTP_…-setup.exe`), and a URL it would fetch
+/// that ends in that name under the version's release tag (`release_tag`).
 pub fn check_release(version: &str, file: &str, url: &str) -> Result<(), String> {
     if version.starts_with('v') {
         return Err(format!("--version {version}: without the leading v (the updater compares it with the signed version)"));
@@ -228,11 +252,15 @@ pub fn check_release(version: &str, file: &str, url: &str) -> Result<(), String>
     if !version_ok(version) {
         return Err(format!("--version {version}: not a version the updater reads (x.y.z, optional -pre and +build)"));
     }
-    if !file.ends_with("-setup.exe") || !file.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
-        return Err(format!("{file}: the updater only saves *-setup.exe names of letters, digits, '.', '_' and '-'"));
+    if !file.starts_with("VibeFTP_") || !file.ends_with("-setup.exe") || !file.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err(format!("{file}: the updater only saves VibeFTP_*-setup.exe names of letters, digits, '.', '_' and '-'"));
     }
     if !url.ends_with(&format!("/{file}")) {
         return Err(format!("the URL must end in /{file}: the updater checks the signed file name against it"));
+    }
+    let tag = release_tag(version);
+    if !url.ends_with(&format!("/releases/download/{tag}/{file}")) {
+        return Err(format!("the URL must end in /releases/download/{tag}/{file}: {tag} is {version}'s release tag"));
     }
     if !url_ok(url) {
         return Err(format!("{url}: the updater only downloads over https (port 443) from {}", RELEASE_HOSTS.join(", ")));

@@ -50,6 +50,7 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${NAME}.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Run ${NAME}"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "${NAME} installs just for you, so its folder has to be inside your own user folder. A folder anywhere else could be changed by other people who use this PC."
 
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -57,6 +58,47 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+
+; Only the user's own folders (X15SIG-1): a folder made under a drive root (C:\Tools\VibeFTP)
+; inherits "Authenticated Users: Modify", so another account could swap the exe. $R8 = 1 when
+; $INSTDIR is a folder below $LOCALAPPDATA or $PROFILE (compared case-blind, as NSIS's StrCmp
+; does) with no ".." part; else 0. Uses $R5..$R8. The same rule for the directory page
+; (.onVerifyInstDir: Next stays off) and for every install, /S and /D= included (the section).
+Function OwnFolder
+  StrCpy $R8 0
+  StrCpy $R5 0
+  ${Do}
+    StrCpy $R6 $INSTDIR 3 $R5
+    ${If} $R6 == ""
+      ${ExitDo}
+    ${EndIf}
+    ${If} $R6 == "\.."
+      Return
+    ${EndIf}
+    IntOp $R5 $R5 + 1
+  ${Loop}
+  ${ForEach} $R7 0 1 + 1
+    ${If} $R7 == 0
+      StrCpy $R6 "$LOCALAPPDATA\"
+    ${Else}
+      StrCpy $R6 "$PROFILE\"
+    ${EndIf}
+    StrLen $R5 $R6
+    StrCpy $R5 $INSTDIR $R5
+    ${If} $R6 != "\"
+    ${AndIf} $R5 == $R6
+    ${AndIf} $INSTDIR != $R6
+      StrCpy $R8 1
+    ${EndIf}
+  ${Next}
+FunctionEnd
+
+Function .onVerifyInstDir
+  Call OwnFolder
+  ${If} $R8 != 1
+    Abort
+  ${EndIf}
+FunctionEnd
 
 ; Started by the updater (/RUN): start VibeFTP, whichever version is in place. $R4, when set, is
 ; why the install failed: left for the app to show (silent installs show nothing).
@@ -108,6 +150,25 @@ Function RenameRetry
 FunctionEnd
 
 Section "Install"
+  ; The folder rule again for installs that skip the page (/S, /D=, an update into an older
+  ; install's folder). Not RestartIfAsked: it would start the exe in that folder, which other
+  ; accounts may have changed; the updater's note says why instead.
+  Call OwnFolder
+  ${If} $R8 != 1
+    StrCpy $R4 "${NAME} installs only inside your own user folder, and $INSTDIR isn't in it. Uninstall ${NAME}, then install it again into a folder of your own."
+    DetailPrint $R4
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "/RUN" $R1
+    ${IfNot} ${Errors}
+      CreateDirectory "$LOCALAPPDATA\com.tedkj.vibeftp"
+      FileOpen $R5 "$LOCALAPPDATA\com.tedkj.vibeftp\update-failed.txt" w
+      FileWrite $R5 $R4
+      FileClose $R5
+    ${EndIf}
+    SetErrorLevel 5
+    Abort $R4
+  ${EndIf}
   SetOutPath "$INSTDIR"
   SetOverwrite on
 

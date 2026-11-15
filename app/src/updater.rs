@@ -5,7 +5,9 @@
 //! than the running one. That closes downgrades to an older, genuinely signed release and swapped files even if the manifest is not ours.
 //!
 //! The download is verified in memory, written under the user's own local app data (not %TEMP%),
-//! reopened so nobody else can write it, checked again byte for byte, and started from there.
+//! reopened so nobody else can write it, checked again byte for byte, and started from there,
+//! but only once Windows says it is validly signed (Authenticode) by the publisher, by the install
+//! check's rule (X15SIG-2). Only VibeFTP's own installer names are taken (X15SIG-5).
 //! HTTPS only, to GitHub's release hosts only (redirects included), with size caps and timeouts.
 //! Any failure before the installer starts leaves the running app as it was.
 
@@ -20,6 +22,8 @@ use std::time::Duration;
 pub const PUBLIC_KEY: &str = "RWRtiPHhr0TNUFN/XkthdjPMyH1O9YUG07Ge9MyAFamDUBzJ2agHr7EA";
 pub const MANIFEST_URL: &str = "https://github.com/tedkj/vibeftp/releases/latest/download/latest.json";
 const PLATFORM: &str = "windows-x86_64";
+/// How VibeFTP's installers are named (`VibeFTP_<version>_x64-setup.exe`, release.ps1).
+const INSTALLER_PREFIX: &str = "VibeFTP_";
 
 #[derive(Clone, Debug)]
 pub struct Policy {
@@ -41,6 +45,12 @@ pub struct Policy {
     pub dir: PathBuf,
     /// The running version.
     pub current: String,
+    /// Who must have signed the installer (Authenticode, X15SIG-2), by the install check's rule
+    /// (`check::by_publisher`); "" takes any valid signature, never none.
+    pub publisher: String,
+    /// What Windows says of a file's signature: `trust::signature` (offline WinVerifyTrust) in a
+    /// release; a stand-in in tests, so no test needs a real signature.
+    pub authenticode: fn(&std::path::Path) -> crate::check::Sig,
 }
 
 impl Policy {
@@ -58,6 +68,8 @@ impl Policy {
             total_timeout: Duration::from_secs(15 * 60),
             dir,
             current: env!("CARGO_PKG_VERSION").into(),
+            publisher: crate::check::PUBLISHER.into(),
+            authenticode: crate::trust::signature,
         }
     }
 
@@ -165,7 +177,8 @@ impl Updater {
             return Err(format!("The update is offered from {}, which is not where VibeFTP's releases live", u.host_str().unwrap_or("?")));
         }
         let file = u.path_segments().and_then(|mut s| s.next_back()).unwrap_or("").to_string();
-        if !file.ends_with("-setup.exe") || !file.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        // VibeFTP's own installers only (X15SIG-5): the release key signs for the whole family.
+        if !file.starts_with(INSTALLER_PREFIX) || !file.ends_with("-setup.exe") || !file.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
             return Err("The update's file name is not one VibeFTP would publish".into());
         }
         let signature = p["signature"]
@@ -213,7 +226,17 @@ impl Updater {
             // Saved, or not writable because another VibeFTP holds this very installer, verified
             // and waiting to run: the same bytes, so this one shares it (its hold, too, lets no
             // one write).
-            (_, Ok((guard, true))) => Ok(Verified { path, _guard: guard }),
+            // Windows must vouch for it as well (X15SIG-2): validly signed by the publisher, by
+            // the install check's rule, read from the held file, so the installer that would start
+            // is the one checked. A leaked release key alone can't push an update this way.
+            (_, Ok((guard, true))) => match self.vouched(&path) {
+                Ok(()) => Ok(Verified { path, _guard: guard }),
+                Err(e) => {
+                    drop(guard);
+                    let _ = std::fs::remove_file(&path); // shared by another VibeFTP: it stays
+                    Err(e)
+                }
+            },
             (Err(e), _) => Err(format!("Could not save the update: {e}")),
             (Ok(()), Err(e)) => Err(format!("Could not reopen the update: {e}")),
             (Ok(()), Ok((guard, false))) => {
@@ -221,6 +244,20 @@ impl Updater {
                 let _ = std::fs::remove_file(&path);
                 Err("The saved update changed on disk; nothing was installed".into())
             }
+        }
+    }
+
+    /// Whether Windows says the saved installer is validly signed by the publisher
+    /// (`check::by_publisher`, the install check's own rule). Anything else is refused in words.
+    fn vouched(&self, path: &std::path::Path) -> Result<(), String> {
+        use crate::check::Sig;
+        let who = if self.policy.publisher.is_empty() { "a publisher Windows trusts".to_string() } else { self.policy.publisher.clone() };
+        match (self.policy.authenticode)(path) {
+            Sig::Signed(s) if crate::check::by_publisher(&self.policy.publisher, &s) => Ok(()),
+            Sig::Signed(s) => Err(format!("The update's signature isn't {who}'s (it names {}); nothing was installed", s.name)),
+            Sig::NotSigned => Err(format!("The update isn't signed by {who}, so Windows can't vouch for it; nothing was installed")),
+            Sig::Broken(why) | Sig::Unknown(why) => Err(format!("Windows couldn't confirm the update is signed by {who} ({why}); nothing was installed")),
+            Sig::Missing => Err("The saved update is gone; nothing was installed".into()),
         }
     }
 
