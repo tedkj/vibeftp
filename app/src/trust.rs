@@ -2,10 +2,11 @@
 //! SHA-256. Both block (they read the whole file): call them from the check's worker only.
 //!
 //! The signature is `WinVerifyTrust` with the generic Authenticode policy, no UI, no revocation
-//! check and URL retrieval from the cache only, so it never goes online; the signer's name is
+//! check and URL retrieval from the cache only, so it never goes online (the updater's own check,
+//! `update_signature`, may fetch the chain: X15RFTP-7); the signer's name is
 //! read from the verified chain (VibeBoot's `autostart/signer.rs`, cut down: the app's own files
 //! carry their signature, so no catalog lookup). The hash is BCrypt's SHA-256, no crate.
-//! The flags are set in `offline_verify`, which a unit test reads; tests/pe.rs pins by this file's
+//! The flags are set in `verify_settings`, which a unit test reads; tests/pe.rs pins by this file's
 //! tokens that they are set there only and that `signature` hands its result straight to the
 //! call, and the state's close and the leaf (review RAB-1, RRAB-2): a test that dropped the cache-only
 //! flag could go online, so it is never run that way.
@@ -177,8 +178,19 @@ pub fn classify(code: u32, signer: Option<Signer>) -> Sig {
     }
 }
 
-/// What Windows says of `path`'s own signature, offline.
+/// What Windows says of `path`'s own signature, offline (the install check in About).
 pub fn signature(path: &Path) -> Sig {
+    verify(path, false)
+}
+
+/// The same for a downloaded update (X15RFTP-7): Windows may fetch what the certificate chain
+/// needs (a root this PC hasn't seen yet, from Windows Update), so a clean PC doesn't refuse a
+/// genuine update. The updater is online anyway; revocation is still not checked.
+pub fn update_signature(path: &Path) -> Sig {
+    verify(path, true)
+}
+
+fn verify(path: &Path, fetch_chain: bool) -> Sig {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Security::WinTrust::*;
     let file = match std::fs::File::open(path) {
@@ -188,7 +200,7 @@ pub fn signature(path: &Path) -> Sig {
     };
     let wide = crate::host::wide_path(path);
     let mut info = WINTRUST_FILE_INFO { cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32, pcwszFilePath: wide.as_ptr(), hFile: file.as_raw_handle(), pgKnownSubject: std::ptr::null_mut() };
-    let mut data = offline_verify(&mut info);
+    let mut data = verify_settings(&mut info, fetch_chain);
     let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
     // SAFETY: `data` points at `info`, which points at `wide` and the open file; all outlive both
     // calls, and the state the first call opens is closed by the second.
@@ -203,16 +215,17 @@ pub fn signature(path: &Path) -> Sig {
 }
 
 /// The verify's settings for `info`'s file, all made before WinVerifyTrust sees them (review
-/// RRAB-2): no UI, no revocation check, URLs from the cache only, so it never goes online. Pure,
-/// so a unit test reads them; tests/pe.rs pins that `signature` hands this straight to the call.
-fn offline_verify(info: &mut windows_sys::Win32::Security::WinTrust::WINTRUST_FILE_INFO) -> windows_sys::Win32::Security::WinTrust::WINTRUST_DATA {
+/// RRAB-2): no UI, no revocation check, and URLs from the cache only, so it never goes online,
+/// unless `fetch_chain` (the updater's, X15RFTP-7) lets Windows fetch what the chain needs. Pure,
+/// so a unit test reads them; tests/pe.rs pins that `verify` hands this straight to the call.
+fn verify_settings(info: &mut windows_sys::Win32::Security::WinTrust::WINTRUST_FILE_INFO, fetch_chain: bool) -> windows_sys::Win32::Security::WinTrust::WINTRUST_DATA {
     use windows_sys::Win32::Security::WinTrust::*;
     let mut data = WINTRUST_DATA { dwUnionChoice: WTD_CHOICE_FILE, ..Default::default() };
     data.Anonymous.pFile = info;
     data.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
     data.dwUIChoice = WTD_UI_NONE;
     data.fdwRevocationChecks = WTD_REVOKE_NONE;
-    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+    data.dwProvFlags = if fetch_chain { WTD_REVOCATION_CHECK_NONE } else { WTD_CACHE_ONLY_URL_RETRIEVAL };
     data.dwStateAction = WTD_STATEACTION_VERIFY;
     data
 }

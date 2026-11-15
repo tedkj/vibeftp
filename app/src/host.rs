@@ -259,6 +259,13 @@ fn known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
     }
 }
 
+/// The user's own folders an install may be in, as the installer has them (vibeftp.nsi
+/// `OwnFolder`: $LOCALAPPDATA and $PROFILE): local app data and the profile.
+pub fn own_folders() -> Vec<PathBuf> {
+    use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, FOLDERID_Profile};
+    [&FOLDERID_LocalAppData, &FOLDERID_Profile].into_iter().filter_map(known_folder).collect()
+}
+
 /// The folders named by the app id, the family's convention, so every update keeps sites.json,
 /// known_hosts.json and edit copies. Do not rename.
 pub fn paths() -> Paths {

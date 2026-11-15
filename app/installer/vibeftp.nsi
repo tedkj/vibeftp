@@ -152,7 +152,9 @@ FunctionEnd
 Section "Install"
   ; The folder rule again for installs that skip the page (/S, /D=, an update into an older
   ; install's folder). Not RestartIfAsked: it would start the exe in that folder, which other
-  ; accounts may have changed; the updater's note says why instead.
+  ; accounts may have changed; the updater's note says why instead. The app itself refuses to
+  ; update a copy outside the user's folders before it quits (updater.rs own_folder, X15RFTP-3),
+  ; so an update never gets here and leaves the user without the app.
   Call OwnFolder
   ${If} $R8 != 1
     StrCpy $R4 "${NAME} installs only inside your own user folder, and $INSTDIR isn't in it. Uninstall ${NAME}, then install it again into a folder of your own."

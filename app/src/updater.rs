@@ -9,7 +9,9 @@
 //! but only once Windows says it is validly signed (Authenticode) by the publisher, by the install
 //! check's rule (X15SIG-2). Only VibeFTP's own installer names are taken (X15SIG-5).
 //! HTTPS only, to GitHub's release hosts only (redirects included), with size caps and timeouts.
-//! Any failure before the installer starts leaves the running app as it was.
+//! Any failure before the installer starts leaves the running app as it was. A copy outside the
+//! user's own folders, which the installer would refuse after the app quit, is refused before
+//! anything is downloaded (X15RFTP-3).
 
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
@@ -48,9 +50,15 @@ pub struct Policy {
     /// Who must have signed the installer (Authenticode, X15SIG-2), by the install check's rule
     /// (`check::by_publisher`); "" takes any valid signature, never none.
     pub publisher: String,
-    /// What Windows says of a file's signature: `trust::signature` (offline WinVerifyTrust) in a
-    /// release; a stand-in in tests, so no test needs a real signature.
+    /// What Windows says of a file's signature: `trust::update_signature` (WinVerifyTrust, which
+    /// may fetch the certificate chain, X15RFTP-7) in a release; a stand-in in tests, so no test
+    /// needs a real signature.
     pub authenticode: fn(&std::path::Path) -> crate::check::Sig,
+    /// The folder the running exe is in, and the user's own folders (local app data, the
+    /// profile): the installer refuses to update a copy outside them, so the app refuses first,
+    /// before it downloads or quits (X15RFTP-3, `own_folder`).
+    pub install_dir: PathBuf,
+    pub own_folders: Vec<PathBuf>,
 }
 
 impl Policy {
@@ -69,7 +77,9 @@ impl Policy {
             dir,
             current: env!("CARGO_PKG_VERSION").into(),
             publisher: crate::check::PUBLISHER.into(),
-            authenticode: crate::trust::signature,
+            authenticode: crate::trust::update_signature,
+            install_dir: std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)).unwrap_or_default(),
+            own_folders: crate::host::own_folders(),
         }
     }
 
@@ -198,6 +208,14 @@ impl Updater {
 
     /// Download, verify and write the installer. Nothing is written unless it checks out.
     pub async fn download(&self, offer: &Offer) -> Result<Verified, String> {
+        // The installer would refuse this copy's folder after the app had quit, leaving the user
+        // without it (X15RFTP-3): say so now, and the app keeps running.
+        if !own_folder(&self.policy.install_dir, &self.policy.own_folders) {
+            return Err(format!(
+                "VibeFTP installs only inside your own user folder, and {} isn't in it, so it can't update itself there. Uninstall VibeFTP, then install it again into a folder of your own; nothing was installed",
+                crate::text::clean_max(&self.policy.install_dir.to_string_lossy(), 200)
+            ));
+        }
         let bytes = self.fetch(&offer.url, self.policy.max_installer, self.policy.total_timeout).await?;
         let key = PublicKey::from_base64(&self.policy.public_key).map_err(|_| "The release key is not valid".to_string())?;
         let sig = Signature::decode(&offer.signature).map_err(|_| "The update's signature is not readable".to_string())?;
@@ -394,6 +412,25 @@ fn describe(e: &reqwest::Error) -> String {
     } else {
         format!("Could not reach the update server: {e}")
     }
+}
+
+/// Whether `dir` is strictly inside one of `own`, case-blind and with no `..` part: the
+/// installer's folder rule (vibeftp.nsi `OwnFolder`), which refuses an update anywhere else.
+pub fn own_folder(dir: &std::path::Path, own: &[PathBuf]) -> bool {
+    let d = dir.to_string_lossy().to_lowercase();
+    if d.split(['\\', '/']).any(|part| part == "..") {
+        return false;
+    }
+    own.iter().any(|o| {
+        let mut o = o.to_string_lossy().to_lowercase();
+        if o.is_empty() {
+            return false;
+        }
+        if !o.ends_with('\\') {
+            o.push('\\');
+        }
+        d.len() > o.len() && d.starts_with(&o)
+    })
 }
 
 /// `a` is a newer version than the running `b`, by semver precedence (build metadata ignored).
