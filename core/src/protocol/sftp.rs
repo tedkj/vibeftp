@@ -107,6 +107,26 @@ fn preferred_for(algo: Option<&str>) -> russh::Preferred {
     p
 }
 
+/// Why a handshake that saw a host key (`seen`: its algorithm and fingerprint) was refused, given
+/// the pin (`pinned_algo`, `expected`); None when the key is not why. A key of another type than
+/// the pinned one is a changed key (X15CRY-1): `preferred_for` asked for the pinned type first, so
+/// a server that still has that key presents it, and only a server without it (an upgrade that
+/// dropped the type, or an attacker in the middle, who picks the type) presents another.
+fn key_refusal(host: &str, pinned_algo: Option<String>, expected: Option<String>, seen: Option<(String, String)>) -> Option<AppError> {
+    let (new_type, actual) = seen?;
+    Some(match expected {
+        Some(exp) if pinned_algo.as_ref().is_some_and(|a| *a != new_type) => AppError::HostKeyTypeChanged {
+            host: host.to_string(),
+            old: format!("{} {exp}", pinned_algo.unwrap_or_default()),
+            new_type,
+            fingerprint: actual,
+        },
+        Some(exp) if exp != actual => AppError::HostKeyChanged { host: host.to_string(), expected: exp, actual },
+        Some(_) => return None,
+        None => AppError::HostKeyUnknown { host: host.to_string(), fingerprint: actual },
+    })
+}
+
 /// A dial or handshake that ran out of time: a transport failure (so not a refusal that
 /// lowers the pool's cap), with the text the user sees.
 fn timed_out(what: &str) -> AppError {
@@ -542,30 +562,8 @@ impl SftpConn {
                 return Err(timed_out("Connection timed out"));
             }
             Ok(Err(e)) => {
-                let (new_type, actual) = seen.lock().unwrap().clone().unzip();
-                return Err(match (expected, actual) {
-                    // The pinned key's type is gone and another one came instead (preferred_for
-                    // asked for the pinned type first): a server upgrade, as OpenSSH sees it,
-                    // not the same alarm as a different key of the same type.
-                    (Some(_), Some(act)) if pinned_algo.is_some() && pinned_algo != new_type => {
-                        AppError::HostKeyTypeChanged {
-                            host: site.host.clone(),
-                            old_type: pinned_algo.unwrap_or_default(),
-                            new_type: new_type.unwrap_or_default(),
-                            fingerprint: act,
-                        }
-                    }
-                    (Some(exp), Some(act)) if exp != act => AppError::HostKeyChanged {
-                        host: site.host.clone(),
-                        expected: exp,
-                        actual: act,
-                    },
-                    (None, Some(act)) => AppError::HostKeyUnknown {
-                        host: site.host.clone(),
-                        fingerprint: act,
-                    },
-                    _ => e.into(),
-                });
+                let seen = seen.lock().unwrap().clone();
+                return Err(key_refusal(&site.host, pinned_algo, expected, seen).unwrap_or_else(|| e.into()));
             }
             Ok(Ok(h)) => h,
         };

@@ -213,7 +213,9 @@ pub async fn sites_read(state: &Core) -> Result<SiteList> {
 /// Some("") = remove stored password (on a key-based SFTP site: the key has no passphrase,
 /// so connect stops asking), Some(pw) = store it. None on a change that makes the secret mean
 /// something else (an SFTP key's passphrase on a site that now logs in with a password, or the
-/// reverse) forgets it: a key's passphrase must never go to a server as a password (SNA5).
+/// reverse) forgets it: a key's passphrase must never go to a server as a password (SNA5). So
+/// does a switch from SFTP or FTPS to plain FTP: a password saved for an encrypted login is not
+/// sent in the clear unless it is typed again (X15CRY-4; `Site::keeps_secret_of`).
 pub async fn site_save(
     state: &Core,
     mut site: Site,
@@ -234,7 +236,7 @@ pub async fn site_save(
         let c = store.sites_for_change()?;
         if !is_new {
             return match c.sites.iter().find(|s| s.id == probe) {
-                Some(s) => Ok((probe, Some(s.stored_secret().to_string()))),
+                Some(s) => Ok((probe, Some(s.clone()))),
                 None => Err(c.missing(&probe)),
             };
         }
@@ -251,8 +253,9 @@ pub async fn site_save(
     })
     .await?;
     site.id = id;
-    // The secret kept as it is only while it still means what it was saved as (SNA5).
-    if password.is_none() && stored.is_some_and(|s| s != site.wants_secret()) {
+    // The secret kept as it is only while it still means what it was saved as (SNA5), and a
+    // password given only to an encrypted channel never goes out over plain FTP (X15CRY-4).
+    if password.is_none() && stored.is_some_and(|s| !site.keeps_secret_of(&s)) {
         password = Some(String::new());
     }
     // 2. The keychain, outside the lock (review FR-5).

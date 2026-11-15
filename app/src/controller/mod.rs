@@ -81,7 +81,10 @@ pub fn trusted_before(p: &vibeftp_core::types::PinnedBefore, cert: bool, fingerp
         Some(pin) if same_pin(pin, fingerprint) => {
             format!("This server was trusted before, with this same {what}. VibeFTP's saved keys were damaged on {when} (kept in {}).", p.file)
         }
-        Some(pin) => format!("This server was trusted before, with a different {what}:\n{pin}\nVibeFTP's saved keys were damaged on {when} (kept in {}).", p.file),
+        Some(pin) => {
+            let pin = if cert { vibeftp_core::protocol::ftp::cert_fingerprint_hex(pin) } else { pin.clone() };
+            format!("This server was trusted before, with a different {what}:\n{pin}\nVibeFTP's saved keys were damaged on {when} (kept in {}).", p.file)
+        }
         None => format!("This server was trusted before, with a {what} that can't be read now. VibeFTP's saved keys were damaged on {when} (kept in {}).", p.file),
     }
 }
@@ -1123,13 +1126,15 @@ impl App {
                     }
                 }
             }
-            AppError::HostKeyTypeChanged { old_type, new_type, fingerprint, .. } => {
+            // A key of another type than the one trusted: as alarming as a changed key (X15CRY-1),
+            // since an attacker in the middle picks the type they present.
+            AppError::HostKeyTypeChanged { old, new_type, fingerprint, .. } => {
                 let ok = self
                     .confirm(
-                        &format!("New host key type for {}", site.host),
-                        &format!("The server no longer offers the {old_type} key you trusted and now presents a {new_type} key:\n{fingerprint}\n\nThis is usual after a server upgrade. If you did not expect it, check the fingerprint with the server's admin. Trust the new key?"),
+                        &format!("Host key for {} CHANGED", site.host),
+                        &format!("The server presented a different kind of key than the one you trusted.\nWas: {old}\nNow: {new_type} {fingerprint}\n\nThis can happen after a server upgrade, but it is also what an attacker in the middle looks like. Check the new fingerprint with the server's admin before you trust it. Trust the new key?"),
                         "Trust new key",
-                        false,
+                        true,
                     )
                     .await;
                 if ok {
@@ -1142,7 +1147,10 @@ impl App {
             // FTPS: a certificate no public authority vouches for (self-signed, private CA, other name).
             AppError::CertUnknown { fingerprint, reason, .. } => {
                 let why = if reason.is_empty() { String::new() } else { format!(" ({reason})") };
-                let head = format!("No public authority vouches for this server's certificate{why}. Its fingerprint:\n{fingerprint}");
+                // Shown as openssl and FileZilla print it, so it can be compared (X15CRY-2); the
+                // pin keeps its own form.
+                let shown = vibeftp_core::protocol::ftp::cert_fingerprint_hex(fingerprint);
+                let head = format!("No public authority vouches for this server's certificate{why}. Its SHA-256 fingerprint, as openssl x509 -fingerprint -sha256 shows it:\n{shown}");
                 let ok = match before(true).await {
                     Some(p) => choose(head, fingerprint.clone(), p, true).await,
                     None => {
@@ -1161,7 +1169,7 @@ impl App {
                 let ok = self
                     .confirm(
                         &format!("Certificate for {} CHANGED", site.host),
-                        &format!("Was: {expected}\nNow: {actual}\n\nThis happens when the server gets a new certificate, but it is also what an attacker in the middle looks like. Trust the new certificate?"),
+                        &format!("Was: {}\nNow: {}\n\nThis happens when the server gets a new certificate, but it is also what an attacker in the middle looks like. Trust the new certificate?", vibeftp_core::protocol::ftp::cert_fingerprint_hex(expected), vibeftp_core::protocol::ftp::cert_fingerprint_hex(actual)),
                         "Trust new certificate",
                         true,
                     )

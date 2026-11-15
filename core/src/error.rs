@@ -23,12 +23,15 @@ pub enum AppError {
     },
     #[error("Unknown host key for {host}: {fingerprint}")]
     HostKeyUnknown { host: String, fingerprint: String },
-    /// The server no longer offers the pinned key's type and presents another type instead
-    /// (an upgrade dropping ssh-rsa, say): `fingerprint` is the new key's.
-    #[error("Host key type for {host} changed from {old_type} to {new_type}: {fingerprint}")]
+    /// The server presented a key of another type than the pinned one, although the pinned type
+    /// was asked for first (`sftp::preferred_for`): an upgrade that dropped ssh-rsa looks like
+    /// this, and so does an attacker in the middle with a key of their own type, so the UI treats
+    /// it as a changed key (X15CRY-1). `old` is the pin (`"<type> SHA256:…"`), `fingerprint`
+    /// the new key's.
+    #[error("Host key for {host} changed to a {new_type} key! Expected {old}, got {fingerprint}")]
     HostKeyTypeChanged {
         host: String,
-        old_type: String,
+        old: String,
         new_type: String,
         fingerprint: String,
     },

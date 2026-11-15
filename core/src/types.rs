@@ -84,6 +84,15 @@ impl Site {
     pub fn stored_secret(&self) -> &str {
         if self.secret_for.is_empty() { self.wants_secret() } else { &self.secret_for }
     }
+
+    /// Whether the secret saved for `before` (this site as it was saved) still means what it
+    /// was saved as now that the site is this: the same kind of secret (SNA5), and never a
+    /// password that only went inside SFTP or FTPS now going out over plain FTP (X15CRY-4).
+    /// Not kept: a save forgets it unless a new one is typed.
+    pub fn keeps_secret_of(&self, before: &Site) -> bool {
+        let unencrypted = self.protocol == Protocol::Ftp && before.protocol != Protocol::Ftp;
+        before.stored_secret() == self.wants_secret() && !unencrypted
+    }
 }
 
 impl Site {

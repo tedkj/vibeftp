@@ -1855,6 +1855,17 @@ fn cert_fingerprint(der: &[u8]) -> String {
     russh::keys::ssh_key::Fingerprint::Sha256(bytes).to_string()
 }
 
+/// An FTPS fingerprint as people compare it (X15CRY-2): the certificate's SHA-256 in uppercase
+/// hex, a colon between bytes, as `openssl x509 -fingerprint -sha256` and FileZilla print it.
+/// Pins stay in `cert_fingerprint`'s form; this is for showing them only. Anything that isn't
+/// such a fingerprint is given back as it is.
+pub fn cert_fingerprint_hex(fp: &str) -> String {
+    match fp.parse::<russh::keys::ssh_key::Fingerprint>() {
+        Ok(russh::keys::ssh_key::Fingerprint::Sha256(b)) => b.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(":"),
+        _ => fp.to_string(),
+    }
+}
+
 /// Plain words for why a certificate is not publicly trusted.
 fn cert_reason(e: &rustls::Error) -> String {
     use rustls::CertificateError as C;

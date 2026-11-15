@@ -366,15 +366,16 @@ impl App {
     }
 
     /// The form now needs another kind of secret than the one saved (an SFTP key's passphrase
-    /// on a site switched to FTP or to a password login, or the reverse): the save forgets the
-    /// saved one unless a new one is typed, and the form already shows it as not saved (SNA5).
+    /// on a site switched to FTP or to a password login, or the reverse), or a password saved for
+    /// SFTP or FTPS would now go out over plain FTP: the save forgets the saved one unless a new
+    /// one is typed, and the form already shows it as not saved (SNA5, X15CRY-4).
     fn sm_secret_switched(&self) -> bool {
-        let stored = {
+        let saved = {
             let st = self.st.borrow();
             let Some(base) = st.form.base.as_ref() else { return false };
-            st.sites.iter().find(|x| x.id == base.id).unwrap_or(base).stored_secret().to_string()
+            st.sites.iter().find(|x| x.id == base.id).unwrap_or(base).clone()
         };
-        stored != self.sm_prepared().wants_secret()
+        !self.sm_prepared().keeps_secret_of(&saved)
     }
 
     /// Recompute "dirty" and the port check after any edit.
