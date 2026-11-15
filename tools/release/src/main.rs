@@ -92,6 +92,30 @@ fn run() -> Result<(), String> {
             println!("{}\n{}", sig.display(), manifest.display());
             Ok(())
         }
+        // A plain minisign signature (`<file>.minisig`) for a file the apps check with the same key:
+        // About's release lists (release-list.ps1). With --pubkey, refused unless the key is the
+        // one the apps compile in; either way the signature is checked before it is kept.
+        Some("sign-file") => {
+            use minisign_verify::{PublicKey, Signature};
+            let file = PathBuf::from(args.get(1).ok_or("sign-file <file>")?);
+            let name = file.file_name().and_then(|n| n.to_str()).ok_or("the file needs a name")?.to_string();
+            let data = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let key = key(&args)?;
+            if let Some(want) = arg(&args, "--pubkey")
+                && key.public_key() != want
+            {
+                return Err(format!("this key is {}, not {want}", key.public_key()));
+            }
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let sig = key.sign(&data, &format!("timestamp:{now}\tfile:{name}"));
+            let pk = PublicKey::from_base64(&key.public_key()).map_err(|e| e.to_string())?;
+            let parsed = Signature::decode(&sig).map_err(|e| e.to_string())?;
+            pk.verify(&data, &parsed, false).map_err(|e| format!("the new signature does not verify: {e}"))?;
+            let out = PathBuf::from(format!("{}.minisig", file.display()));
+            std::fs::write(&out, sig).map_err(|e| format!("{}: {e}", out.display()))?;
+            println!("{}", out.display());
+            Ok(())
+        }
         // The version's release tag (`release_tag`), for release.ps1: one rule everywhere.
         Some("tag") => {
             let version = args.get(1).ok_or("tag <version>")?;
@@ -105,7 +129,7 @@ fn run() -> Result<(), String> {
             println!("verified: {} with {pubkey}", file.display());
             Ok(())
         }
-        _ => Err("usage: vibeftp-release keygen [--out <folder>] | sign <installer> --version <v> --url <url> | tag <version> | verify <installer> --pubkey <key> | pubkey".into()),
+        _ => Err("usage: vibeftp-release keygen [--out <folder>] | sign <installer> --version <v> --url <url> | sign-file <file> [--pubkey <key>] | tag <version> | verify <installer> --pubkey <key> | pubkey".into()),
     }
 }
 
