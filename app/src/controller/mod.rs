@@ -211,6 +211,9 @@ pub struct App {
     q_head: Cell<usize>,
     queue_model: Rc<QueueModel>,
     log_model: Rc<VecModel<LogRow>>,
+    /// The toasts on screen, edited row by row (X15RFTP-2): a toast that stays keeps its row, so
+    /// a screen reader doesn't read it out again when another one comes or goes.
+    toast_model: Rc<VecModel<ToastItem>>,
     /// Delivers the engine events queued right now (set by main; the tests have none).
     drain: RefCell<Option<Box<dyn Fn()>>>,
     timers: RefCell<Vec<Timer>>,
@@ -305,6 +308,33 @@ fn log_row(l: &LogLine) -> LogRow {
     LogRow { time: log_time(l.ts).into(), line: shown(&l.line).as_ref().into(), kind }
 }
 
+/// Makes `model` hold `want`, touching only the rows that differ: a row whose key is in both
+/// keeps its place in the model (its data is set only if it changed), so Slint keeps the item
+/// built for it. Replacing the whole model rebuilds every item, and a screen reader then reads a
+/// toast that stayed out again (X15RFTP-2).
+pub(crate) fn sync_rows<T: Clone + PartialEq + 'static>(model: &VecModel<T>, want: &[T], same: impl Fn(&T, &T) -> bool) {
+    for i in (0..model.row_count()).rev() {
+        if let Some(row) = model.row_data(i)
+            && !want.iter().any(|w| same(w, &row))
+        {
+            model.remove(i);
+        }
+    }
+    for (i, w) in want.iter().enumerate() {
+        match model.row_data(i) {
+            Some(row) if same(w, &row) => {
+                if row != *w {
+                    model.set_row_data(i, w.clone());
+                }
+            }
+            _ => model.insert(i, w.clone()),
+        }
+    }
+    while model.row_count() > want.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
 impl App {
     /// `check`: About's install check's services (`Check::system` in `main`, fakes in the tests).
     pub fn new(ui: &AppWindow, backend: Rc<dyn Backend>, spawner: Rc<dyn Spawn>, check: Check) -> Rc<App> {
@@ -317,6 +347,8 @@ impl App {
         ui.set_queue_rows(ModelRc::from(queue_model.clone()));
         let log_model = Rc::new(VecModel::default());
         ui.set_log_rows(ModelRc::from(log_model.clone()));
+        let toast_model = Rc::new(VecModel::default());
+        ui.set_toasts(ModelRc::from(toast_model.clone()));
         let st = State { parallel: 1, ..Default::default() };
         let app = Rc::new(App {
             ui: ui.as_weak(),
@@ -330,6 +362,7 @@ impl App {
             q_head: Cell::new(0),
             queue_model,
             log_model,
+            toast_model,
             drain: RefCell::new(None),
             timers: RefCell::default(),
             check,
@@ -544,14 +577,14 @@ impl App {
     }
 
     fn push_toasts(&self) {
-        let Some(ui) = self.ui.upgrade() else { return };
-        let st = self.st.borrow();
-        let items: Vec<ToastItem> = st
+        let items: Vec<ToastItem> = self
+            .st
+            .borrow()
             .toasts
             .iter()
             .map(|(id, text, kind, action)| ToastItem { id: *id, text: shown_lines(text).into(), kind: *kind, action: action.as_str().into() })
             .collect();
-        ui.set_toasts(ModelRc::new(VecModel::from(items)));
+        sync_rows(&self.toast_model, &items, |a, b| a.id == b.id);
     }
 
     // ---------- toasts ----------

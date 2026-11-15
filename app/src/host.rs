@@ -301,28 +301,82 @@ pub fn fit_frame(frame: Px, work: Px) -> Option<Px> {
     (fitted != frame).then_some(fitted)
 }
 
+/// What the fit does with a window in this state (X15RFTP-4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FitWhat {
+    /// Not on screen yet, or minimized (a shortcut set to "Run: Minimized"): nothing to fit now,
+    /// so the next window event tries again, the one after the user restores it at the latest.
+    Later,
+    /// Maximized (a shortcut set to "Run: Maximized"): its restore rectangle, the size it comes
+    /// back at when the user restores it.
+    RestoreRect,
+    /// A normal window: its frame.
+    Frame,
+}
+
+pub fn fit_what(visible: bool, minimized: bool, maximized: bool) -> FitWhat {
+    if !visible || minimized {
+        FitWhat::Later
+    } else if maximized {
+        FitWhat::RestoreRect
+    } else {
+        FitWhat::Frame
+    }
+}
+
+/// A maximized window's restore rectangle fitted to the work area of its monitor (`fit_frame`).
+/// `normal` is GetWindowPlacement's, in workspace coordinates (screen coordinates less `origin`,
+/// the primary monitor's work-area top left); `work` is in screen coordinates; the result is in
+/// workspace coordinates again. None when it already fits.
+pub fn fit_restore(normal: Px, work: Px, origin: (i32, i32)) -> Option<Px> {
+    let shift = |r: Px, dx: i32, dy: i32| Px { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy };
+    fit_frame(shift(normal, origin.0, origin.1), work).map(|f| shift(f, -origin.0, -origin.1))
+}
+
 /// Fit a window that has just opened into its monitor's work area (X15A11Y-3; `fit_frame`):
 /// the window opens at its preferred size, sized for a big screen at 100 %, which on a 1080p
 /// laptop at 150 % runs past the taskbar and puts the toasts and the status line out of sight.
 /// All in physical pixels (the process is per-monitor DPI aware, so no scaling): the work area of
 /// the monitor the window is on, and its visible frame (DWM's, without the invisible resize
-/// borders, which go back on around it). None while the window is not on screen yet (try again
-/// later); else whether it moved.
+/// borders, which go back on around it). A maximized window gets its restore rectangle fitted
+/// instead (that one has no DWM frame yet, so its invisible borders count as part of it: it
+/// comes back a few pixels inside the area). None while the window is not on screen yet or is
+/// minimized (try again later, `fit_what`); else whether it changed.
 pub fn fit_to_work_area(hwnd: isize) -> Option<bool> {
-    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Foundation::{POINT, RECT};
     use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint, MonitorFromRect, MonitorFromWindow};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
+    };
     let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
     let px = |r: RECT| Px { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    let work_of = |m| {
+        // SAFETY: a MONITORINFO of its own size for a monitor handle Windows just gave.
+        let mut mi: MONITORINFO = unsafe { std::mem::zeroed() };
+        mi.cbSize = size_of::<MONITORINFO>() as u32;
+        (unsafe { GetMonitorInfoW(m, &mut mi) } != 0).then(|| px(mi.rcWork))
+    };
     // SAFETY: plain Win32 calls on the app's own window handle, each with a struct of its own
     // size; a call that fails leaves the window as it is.
     unsafe {
-        if IsWindowVisible(hwnd) == 0 {
-            return None;
-        }
-        if IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 {
-            return Some(false);
+        match fit_what(IsWindowVisible(hwnd) != 0, IsIconic(hwnd) != 0, IsZoomed(hwnd) != 0) {
+            FitWhat::Later => return None,
+            FitWhat::Frame => {}
+            FitWhat::RestoreRect => {
+                let mut wp: WINDOWPLACEMENT = std::mem::zeroed();
+                wp.length = size_of::<WINDOWPLACEMENT>() as u32;
+                if GetWindowPlacement(hwnd, &mut wp) == 0 {
+                    return Some(false);
+                }
+                let Some(primary) = work_of(MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY)) else { return Some(false) };
+                let n = wp.rcNormalPosition;
+                let on_screen = RECT { left: n.left + primary.left, top: n.top + primary.top, right: n.right + primary.left, bottom: n.bottom + primary.top };
+                let Some(work) = work_of(MonitorFromRect(&on_screen, MONITOR_DEFAULTTONEAREST)) else { return Some(false) };
+                let Some(to) = fit_restore(px(n), work, (primary.left, primary.top)) else { return Some(false) };
+                wp.rcNormalPosition = RECT { left: to.left, top: to.top, right: to.right, bottom: to.bottom };
+                return Some(SetWindowPlacement(hwnd, &wp) != 0);
+            }
         }
         let mut outer: RECT = std::mem::zeroed();
         if GetWindowRect(hwnd, &mut outer) == 0 {
@@ -332,12 +386,8 @@ pub fn fit_to_work_area(hwnd: isize) -> Option<bool> {
         if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS as u32, (&mut seen as *mut RECT).cast(), size_of::<RECT>() as u32) != 0 {
             seen = outer;
         }
-        let mut mi: MONITORINFO = std::mem::zeroed();
-        mi.cbSize = size_of::<MONITORINFO>() as u32;
-        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
-            return Some(false);
-        }
-        let Some(to) = fit_frame(px(seen), px(mi.rcWork)) else { return Some(false) };
+        let Some(work) = work_of(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)) else { return Some(false) };
+        let Some(to) = fit_frame(px(seen), work) else { return Some(false) };
         let (l, t, r, b) = (seen.left - outer.left, seen.top - outer.top, outer.right - seen.right, outer.bottom - seen.bottom);
         Some(SetWindowPos(hwnd, std::ptr::null_mut(), to.left - l, to.top - t, to.right - to.left + l + r, to.bottom - to.top + t + b, SWP_NOZORDER | SWP_NOACTIVATE) != 0)
     }
