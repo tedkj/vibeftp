@@ -480,7 +480,7 @@ export component AppWindow inherits Window {
                             alignment: center;
                             Icon { path: Icons.terminal; tint: Theme.ink-3; }
                         }
-                        Text { text: root.status-left; horizontal-stretch: 1; overflow: elide; font-family: Type.mono; font-size: Type.small; color: root.status-warn ? Theme.danger : Theme.ink-3; vertical-alignment: center; }
+                        Text { text: root.status-left; accessible-live-region: polite; horizontal-stretch: 1; overflow: elide; font-family: Type.mono; font-size: Type.small; color: root.status-warn ? Theme.danger : Theme.ink-3; vertical-alignment: center; }
                     }
                     TouchArea { clicked => { root.toggle-log(); } }
                 }

@@ -61,8 +61,11 @@ base64 = "0.22"
 # check (WinHTTP for the release list, WinVerifyTrust and the signer's name, BCrypt's SHA-256,
 # the exe's file identity for an update under the running app).
 # minisign-verify above also checks the release list's signature, with the updater's key.
+# Gdi and Dwm: the window fitted into its monitor's work area at start.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_Security_Cryptography",

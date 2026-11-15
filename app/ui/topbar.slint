@@ -233,11 +233,11 @@ export component TopBar inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
-            IconButton { inert: root.inert; icon: Icons.sync; label: "Synchronized browsing"; tooltip: "Synchronized browsing"; active: root.sync; clicked => { root.toggle-sync(); } }
+            IconButton { inert: root.inert; icon: Icons.sync; label: "Synchronized browsing"; tooltip: "Synchronized browsing"; active: root.sync; toggle: true; clicked => { root.toggle-sync(); } }
         }
         VerticalLayout {
             alignment: center;
-            IconButton { inert: root.inert; icon: Icons.terminal; label: "Protocol log"; tooltip: "Protocol log"; active: root.log; clicked => { root.toggle-log(); } }
+            IconButton { inert: root.inert; icon: Icons.terminal; label: "Protocol log"; tooltip: "Protocol log"; active: root.log; toggle: true; clicked => { root.toggle-log(); } }
         }
         VerticalLayout {
             alignment: center;

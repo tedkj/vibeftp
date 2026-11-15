@@ -34,6 +34,15 @@ fn cursor_in(window: &slint::Window) -> Option<(f32, f32)> {
     Some(((p.x - origin.x) as f32 / s, (p.y - origin.y) as f32 / s))
 }
 
+/// The window's Win32 handle, for `host::fit_to_work_area`.
+fn hwnd_of(w: &slint::winit_030::winit::window::Window) -> Option<isize> {
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match w.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        _ => None,
+    }
+}
+
 fn hit(ui: &AppWindow) -> (i32, i32) {
     match cursor_in(ui.window()) {
         Some((x, y)) => {
@@ -143,9 +152,16 @@ fn main() -> Result<(), slint::PlatformError> {
     // Files dragged in from Explorer: highlight the target while they hover, upload on drop.
     let dropped: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
     let hover = Rc::new(Timer::default());
+    // The window opens at its preferred size; on a small or highly scaled screen that runs past
+    // the taskbar, so the first window event once it is on screen fits it into the monitor's work
+    // area (X15A11Y-3), once.
+    let fitted = std::cell::Cell::new(false);
     {
         let (app, weak, dropped, hover) = (app.clone(), ui.as_weak(), dropped.clone(), hover.clone());
-        ui.window().on_winit_window_event(move |_, event| {
+        ui.window().on_winit_window_event(move |window, event| {
+            if !fitted.get() && window.with_winit_window(hwnd_of).flatten().and_then(host::fit_to_work_area).is_some() {
+                fitted.set(true);
+            }
             match event {
                 WindowEvent::HoveredFile(_) if !hover.running() => {
                     let (app, weak) = (app.clone(), weak.clone());

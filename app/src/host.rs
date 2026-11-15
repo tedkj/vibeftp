@@ -278,3 +278,67 @@ pub fn paths() -> Paths {
 pub fn dev_paths(home: &std::path::Path) -> Paths {
     Paths { config: home.join("config"), local_data: home.join("data"), home: Some(home.join("home")) }
 }
+
+/// A rectangle in physical pixels, edges as Win32's RECT has them (right and bottom exclusive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Px {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// Where a window's visible frame goes so it fits the monitor's work area (X15A11Y-3): a side
+/// longer than the area's shrinks to it, then the frame moves inside the area (left and top edges
+/// first). None when it already fits. The window's minimum size still wins: Windows keeps it
+/// (WM_GETMINMAXINFO), so a window whose minimum is bigger than the area ends up at its minimum.
+pub fn fit_frame(frame: Px, work: Px) -> Option<Px> {
+    let w = (frame.right - frame.left).min(work.right - work.left);
+    let h = (frame.bottom - frame.top).min(work.bottom - work.top);
+    let left = frame.left.min(work.right - w).max(work.left);
+    let top = frame.top.min(work.bottom - h).max(work.top);
+    let fitted = Px { left, top, right: left + w, bottom: top + h };
+    (fitted != frame).then_some(fitted)
+}
+
+/// Fit a window that has just opened into its monitor's work area (X15A11Y-3; `fit_frame`):
+/// the window opens at its preferred size, sized for a big screen at 100 %, which on a 1080p
+/// laptop at 150 % runs past the taskbar and puts the toasts and the status line out of sight.
+/// All in physical pixels (the process is per-monitor DPI aware, so no scaling): the work area of
+/// the monitor the window is on, and its visible frame (DWM's, without the invisible resize
+/// borders, which go back on around it). None while the window is not on screen yet (try again
+/// later); else whether it moved.
+pub fn fit_to_work_area(hwnd: isize) -> Option<bool> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+    let px = |r: RECT| Px { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    // SAFETY: plain Win32 calls on the app's own window handle, each with a struct of its own
+    // size; a call that fails leaves the window as it is.
+    unsafe {
+        if IsWindowVisible(hwnd) == 0 {
+            return None;
+        }
+        if IsIconic(hwnd) != 0 || IsZoomed(hwnd) != 0 {
+            return Some(false);
+        }
+        let mut outer: RECT = std::mem::zeroed();
+        if GetWindowRect(hwnd, &mut outer) == 0 {
+            return Some(false);
+        }
+        let mut seen = outer;
+        if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS as u32, (&mut seen as *mut RECT).cast(), size_of::<RECT>() as u32) != 0 {
+            seen = outer;
+        }
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
+            return Some(false);
+        }
+        let Some(to) = fit_frame(px(seen), px(mi.rcWork)) else { return Some(false) };
+        let (l, t, r, b) = (seen.left - outer.left, seen.top - outer.top, outer.right - seen.right, outer.bottom - seen.bottom);
+        Some(SetWindowPos(hwnd, std::ptr::null_mut(), to.left - l, to.top - t, to.right - to.left + l + r, to.bottom - to.top + t + b, SWP_NOZORDER | SWP_NOACTIVATE) != 0)
+    }
+}

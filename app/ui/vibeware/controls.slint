@@ -188,6 +188,9 @@ export component Button {
     in property <string> label: root.text;
     // A toggle that is on (sync browsing, the log): accent ink on a raised face.
     in property <bool> active;
+    // `active` means on or off (not just a highlight): screen readers hear the button as a toggle
+    // and whether it is on (X15A11Y-6).
+    in property <bool> toggle;
     // Behind an open dialog: Tab skips it; looks unchanged.
     in property <bool> inert;
     // Off: Return goes on to the dialog around it (Copy); Space still presses.
@@ -201,6 +204,7 @@ export component Button {
     accessible-role: button;
     accessible-label: root.label;
     accessible-description: root.tooltip;
+    accessible-checkable: root.toggle;
     accessible-checked: root.active;
     accessible-enabled: root.enabled;
     accessible-action-default => { root.press(); }
@@ -269,8 +273,9 @@ export component Button {
         }
     }
 
+    // Enabled even when the button is not, so its tip still shows: that is where it says why it
+    // is off (X15A11Y-5). press() refuses the click.
     ta := TipArea {
-        enabled: root.enabled;
         tooltip: root.tooltip;
         clicked => { root.press(); }
     }
@@ -1370,6 +1375,9 @@ export component Toast {
     height: lay.preferred-height;
     accessible-role: AccessibleRole.text;
     accessible-label: root.text;
+    // Screen readers read a toast out when it appears (X15A11Y-1): an error at once, breaking
+    // into what is being read; anything else when the reader is done.
+    accessible-live-region: root.kind == ToastKind.error ? AccessibleLiveness.assertive : AccessibleLiveness.polite;
     property <color> signal: root.kind == ToastKind.error ? Theme.danger : root.kind == ToastKind.ok ? Theme.ok : Theme.accent;
 
     Chamfer {
