@@ -16,7 +16,9 @@ export global Theme {
     // Ink.
     out property <color> ink: dark ? #ecebe6 : #15171a;
     out property <color> ink-2: dark ? #aeb2b9 : #484d55;
-    out property <color> ink-3: dark ? #767b83 : #7a7f88;
+    // 4.5:1 or more on every surface and on a selected row (accent-soft), both themes
+    // (X15A11Y-4, Ted 2026-11-15: lightness only; tests/contrast.rs).
+    out property <color> ink-3: dark ? #999ca3 : #595d64;
 
     // The one accent: signal blue.
     out property <color> accent: dark ? #7d95ff : #2b46c4;
@@ -30,6 +32,14 @@ export global Theme {
     out property <color> warn: dark ? #e2a24a : #a8650a;
     out property <color> danger: dark ? #e0564e : #c03a34;
     out property <color> danger-ink: dark ? #1a0605 : #ffffff;
+    // Status words: ok and warn as text, 4.5:1 or more where text sits (light: darker, same hue);
+    // dots, bars, fills and icons keep ok and warn (X15A11Y-4, Ted 2026-11-15).
+    out property <color> ok-text: dark ? #4fc283 : #176a3a;
+    out property <color> warn-text: dark ? #e2a24a : #865008;
+    // A colour picked elsewhere (a state's colour) as text: ok and warn become their text tokens.
+    public pure function as-text(c: color) -> color {
+        return c == ok ? ok-text : c == warn ? warn-text : c;
+    }
 
     // Scrim behind dialogs.
     out property <color> scrim: dark ? #00000080 : #15171a40;
