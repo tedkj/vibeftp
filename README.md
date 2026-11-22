@@ -29,9 +29,10 @@ Windows itself may fetch certificates from Windows Update and Certum (who issued
 ## Download
 
 Get the installer from [Releases](https://github.com/tedkj/vibeftp/releases). It installs for your
-user only, without admin rights. Previews are not code signed yet, so Windows SmartScreen may warn
-before it runs. Compare the installer's SHA-256 with the one in `SHA256SUMS.txt` on the release
-page:
+user only, without admin rights. The installer, VibeFTP.exe and its uninstaller are code signed by
+"Open Source Developer Ted Kenneth Johansen" (right-click › Properties › Digital Signatures). The
+certificate is new, so Windows SmartScreen may still warn before it runs. You can also compare the
+installer's SHA-256 with the one in `SHA256SUMS.txt` on the release page:
 
 ```powershell
 Get-FileHash .\VibeFTP_0.2.1-preview_x64-setup.exe
