@@ -35,7 +35,7 @@ certificate is new, so Windows SmartScreen may still warn before it runs. You ca
 installer's SHA-256 with the one in `SHA256SUMS.txt` on the release page:
 
 ```powershell
-Get-FileHash .\VibeFTP_0.2.1-preview_x64-setup.exe
+Get-FileHash .\VibeFTP_0.2.2-preview_x64-setup.exe
 ```
 
 The app looks for full releases only, so a preview doesn't update itself to the next preview: get
